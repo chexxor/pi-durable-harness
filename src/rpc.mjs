@@ -6,6 +6,7 @@
 // Commands answer with COMMITTED durable state only: pi-durable's spec says only committed state is
 // observable, so no reply invents an in-flight guess.
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { readFeed } from "./eventfeed.mjs";
 
 export function commandNames() {
 	return ["status", "config", "read", "prompt", "watch", "abort", "compact"];
@@ -37,6 +38,15 @@ export async function handle(parts, msg) {
 	 const requestId = msg.requestId ?? `rpc:${process.pid}:${Date.now()}`;
 	 const submission = await conversation.submit({ type: "input", content: msg.text, requestId, ...(msg.whenBusy ? { whenBusy: msg.whenBusy } : {}) }, context);
 	 return { requestId, submissionId: submission.id, status: submission.status };
+	 }
+	 case "watch": {
+	 // The feed, not a re-read: pi-durable's own client transcript layer decides what `since` means
+	 // (`ConversationWindow.from`), and `resume` is the boundary that continues it (`transcript.resume`),
+	 // so an RPC client that keeps re-issuing `watch` with the returned boundary advances without
+	 // re-delivering an entry and without an offset of ours. Partials come as their own rows because a
+	 // progress commit may be deferred, and therefore may never be stored.
+	 const feed = await readFeed(harness, conversation.id, { since: msg.since, limit: msg.limit ?? 50, context });
+	 return { rows: feed.rows, partials: feed.partials, since: feed.resume, newest: feed.newest };
 	 }
 	 case "abort": {
 	 await conversation.abort(context);

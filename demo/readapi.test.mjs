@@ -17,6 +17,8 @@ import { Harness } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { openHarness, prompt, scriptTurn, transcript } from "../src/core.mjs";
 import { openStore, readEntries, listConversations, usage } from "../src/readapi.mjs";
+import { readFeed, follow } from "../src/eventfeed.mjs";
+import { handle as rpcHandle, commandNames } from "../src/rpc.mjs";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { ReadOnlySession } from "@earendil-works/pi-durable";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
@@ -83,8 +85,6 @@ check("listConversations reports the store's own conversation ids", conversation
 	`ids=${conversations.map((c) => c.id).join(",")}`);
 const ledger = await usage(viewer);
 check("usage read comes from the store, not a reconstruction", Object.keys(ledger?.models ?? {}).length > 0, JSON.stringify(ledger));
-await viewer.harness.close(BACKGROUND_CONTEXT);
-await viewer.storage.close(BACKGROUND_CONTEXT);
 
 // 5. what a viewer is NOT allowed to do: the read-only file open. Measured, and reported as a note
 //    so a reader of this demo cannot assume the obvious shortcut works on this pin.
@@ -95,23 +95,72 @@ try {
 	note("openNodeSqliteStorage read-only mode", `${String(err?.message ?? err).slice(0, 60)} (the opener applies migrations on open, so a viewer opens normally and stays read-only at the Harness)`);
 }
 
-// second process proof: a child process reads the same store with only src/readapi.mjs, and its
-// stdout must show the same newest entry id the parent saw.
-writeFileSync(join(dir, "expected-newest.txt"), String(writerIds.at(-1)));
-const child = await import("node:child_process");
-const childScript = join(dir, "child-read.mjs");
+// second process proof: a SEPARATE process, with only the read API on its import path, must see the same
+// committed line. The script is written into the repo's own tree (not /tmp) so bare package imports
+// resolve through the pinned node_modules - which is also the point: a reader resolves pi-durable the
+// same way the writer does, and still cannot open a second mutation line.
+const rootDir = process.cwd();
+const childScript = join(rootDir, ".scratch", "readapi-child.mjs");
 writeFileSync(childScript, [
-	`import { openStore, readEntries } from "${process.cwd()}/src/readapi.mjs";`,
+	`import { openStore, readEntries } from "../src/readapi.mjs";`,
 	`import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";`,
-	"const store = await openStore(process.argv[2]);",
-	"const page = await readEntries(store, Number(process.argv[1]), { limit: 100 });",
+	"const store = await openStore(process.argv[3]);",
+	"const page = await readEntries(store, Number(process.argv[2]), { limit: 100 });",
 	"console.log('child-newest=' + page.items.at(-1)?.id);",
 	"await store.harness.close(BACKGROUND_CONTEXT);",
 	"await store.storage.close(BACKGROUND_CONTEXT);",
 ].join("\n"));
-const run = await child.spawn("node", [childScript, String(conversationId), storePath], { cwd: dir });
-await run;
-check("a second process reads the same committed line", readFileSync(join(dir, "expected-newest.txt"), "utf8").trim() !== "", "child ran");
+const child = await import("node:child_process");
+const childLine = await child.execFileSync("node", [childScript, String(conversationId), storePath], { cwd: rootDir, encoding: "utf8" }).trim();
+check("a second process reads the same committed line", childLine === `child-newest=${writerIds.at(-1)}`, `${childLine} vs expected child-newest=${writerIds.at(-1)}`);
+
+// 6. the event feed: pi-durable's own client transcript layer (`ConversationTranscript`), a `ConversationWindow.from`
+//    boundary for --since, and the partial in the `pi.live` document as its OWN row. The viewer is readOnly, and
+//    pi-durable's own doc for readOnly says "the Harness stays usable for reads and watches" - so the feed being
+//    available here is pi-durable's rule, not a hole we chose not to plug.
+const viewerConversation = await viewer.harness.conversation(conversationId, BACKGROUND_CONTEXT);
+const firstWatch = await rpcHandle({ harness: viewer.harness, conversation: viewerConversation, context: BACKGROUND_CONTEXT }, { command: "watch", limit: 10 });
+check("RPC watch answers rows and a resume boundary", Array.isArray(firstWatch.rows) && firstWatch.since !== undefined, JSON.stringify(firstWatch).slice(0, 140));
+check("resume boundary is pi-durable's own shape", typeof firstWatch.since?.from === "number", JSON.stringify(firstWatch.since));
+const secondWatch = await rpcHandle({ harness: viewer.harness, conversation: viewerConversation, context: BACKGROUND_CONTEXT }, { command: "watch", since: firstWatch.since, limit: 10 });
+const firstIds = new Set(firstWatch.rows.map((row) => row.id));
+const repeated = secondWatch.rows.filter((row) => firstIds.has(row.id));
+check("re-issuing watch with the boundary delivers nothing twice", repeated.length === 0, `${repeated.length} repeats of ids ${[...firstIds].join(",")}`);
+check("watch rows exclude the partial from the entry rows", (firstWatch.partials ?? []).every((row) => row.kind === "partial"), JSON.stringify(firstWatch.partials));
+// A viewer closes only after every read it made, so the reads above are proved against an open Session.
+await viewer.harness.close(BACKGROUND_CONTEXT);
+await viewer.storage.close(BACKGROUND_CONTEXT);
+
+
+// 7. the partial while it is IN FLIGHT, not after it settled: a turn is followed while it runs, and a running
+//    tool call must show up as a streaming row of kind "partial" carrying no entry id. The reason an entry row
+//    would be wrong is quoted in src/eventfeed.mjs: progress commits are deferred, so a partial can be observed
+//    before it is stored and can be lost by a crash.
+const feedStore = join(dir, "feed.sqlite");
+const feedRun = await openHarness({ storePath: feedStore, cwd: dir });
+scriptTurn(feedRun.faux, [
+ { tool: "bash", args: { command: "sleep 0.5; echo PARTIAL_PROBE" } },
+ "the answer after the running tool call settled",
+]);
+const feedRows = [];
+const feedHandle = await follow(feedRun.harness, feedRun.conversation.id, { context: feedRun.context, onRow: (row) => { feedRows.push(row); }, limit: 60 });
+const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
+const running = prompt(feedRun.conversation, "run the probe", feedRun.context, { waitForIdle: false });
+// Wait until the feed has shown the partial, bounded so a stalled run cannot hang the demo: the feed is
+// watched WHILE the turn runs, which is the only way to see a state that may never be stored.
+let waited = 0;
+while (feedRows.every((row) => row.kind !== "partial") && waited < 4000) {
+ await sleep(50);
+ waited += 50;
+}
+await feedHandle.stop();
+await running;
+const partialRows = feedRows.filter((row) => row.kind === "partial");
+const entryRows = feedRows.filter((row) => row.kind !== "partial");
+check("a running tool call shows as a streaming row", partialRows.length >= 1, `${feedRows.length} rows, 0 partial`);
+check("a partial row carries no entry id", partialRows.every((row) => !row.id), partialRows.map((row) => row.id).join(","));
+check("entry rows never include the partial", entryRows.every((row) => row.kind !== "partial"), `${entryRows.length} entry rows`);
+await feedRun.harness.close(feedRun.context);
 
 console.log(`readapi: ${passed}/${total} checks passed`);
 process.exit(passed === total ? 0 : 1);
