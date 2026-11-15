@@ -137,6 +137,15 @@ surface: its ExtensionContext accessors, its ExtensionAPI methods (`sendMessage`
 `getActiveTools`, `registerMcpServer`, `getSettings`, …), and its Custom UI class (ctx.ui dialogs, the
 in-TUI editor, autocomplete, theme/renderer knobs) — all named as shimmed or unsupported with a reason.
 
+## How the work was executed
+
+[docs/execution.md](docs/execution.md) records the protocol as it ran: the sequential spine first (task-1
+pin/deps, then task-2 harness core — every sibling imports the core, so it has to land first), then the
+module tasks as siblings each owning a DISJOINT file set with its own verification contract, each closed
+by a checkpoint tag in git. The file-disjointness is the machine-checkable half of "these could run in
+parallel": no file appears in two task rows, and the doc prints the command that re-derives that table
+from the tags.
+
 ## Layout
 
 | Path | What it is |
