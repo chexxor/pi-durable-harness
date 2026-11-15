@@ -1,7 +1,8 @@
 // src/rpc.mjs - one command handler, spoken by both the RPC stdin mode and the attach socket.
 //
-// PROVENANCE: the verb set follows pi 1.5.2's RPC surface (docs/rpc-commands.md) and Durian-Pi's
-// src/cli-seam.mjs / src/intent.mjs entry seam, read 2026-11-14 at pin v1.5.1. Seats, broker,
+// PROVENANCE: the verb set follows the RPC docs INSIDE the pinned package - node_modules/@earendil-works/
+// pi-coding-agent/docs/rpc.md at pin v1.5.1, which scripts/audit-pi-docs.mjs re-reads - together with the
+// entry seam of Durian-Pi's src/cli-seam.mjs and its flag parser src/tui/durable/cliargs.mjs, read 2026-11-14. Seats, broker,
 // cross-seat queue, genlock, worktrees, metrics, check, constitution and selfdev are dropped.
 // Commands answer with COMMITTED durable state only: pi-durable's spec says only committed state is
 // observable, so no reply invents an in-flight guess.

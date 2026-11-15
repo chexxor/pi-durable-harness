@@ -113,8 +113,8 @@ ledger separate from pi-durable's usage plane, and classifies endpoints (loopbac
 
 The pi package ecosystem is reused through pi's own library exports, and every capability pi has that
 pi-durable does not is **named** rather than quietly dropped: [docs/package-support.md](docs/package-support.md)
-is generated from `src/packages/matrix.mjs` by `scripts/render-matrix.mjs` — 75 rows
-(8 native / 27 shimmed / 40 unsupported), evidence per row, plus the packages actually installed on
+is generated from `src/packages/matrix.mjs` by `scripts/render-matrix.mjs` — 79 rows
+(8 native / 29 shimmed / 42 unsupported), evidence per row, plus the packages actually installed on
 this machine and what loaded from them. `src/packages/loader.mjs` uses pi's `DefaultResourceLoader`,
 `discoverAndLoadExtensions` and `loadProjectContextFiles`; `src/packages/adapter.mjs` maps pi's
 `registerTool`, `tool_call`/`tool_result`/provider/compaction handlers, skills, prompts, themes and
@@ -123,9 +123,14 @@ context files onto pi-durable's `defineExtension`/`defineTool`/`hook`/`section`.
 four real pi packages installed here. `scripts/audit-pi-docs.mjs` re-reads pi's OWN docs inside the
 pinned package (packages.md, extensions.md, rpc.md, cli.md, sessions.md, compaction.md), harvests the
 capabilities they enumerate (213 of them), and fails if any is named by neither a matrix row's `names`
-array nor (for a flag this harness itself takes) by the option parser — so the matrix above is checked
-against pi's docs, not against a list someone remembered, and a reason sentence that happens to mention
-pi's verb never counts as covering it. What that audit now forces into the open is pi's whole extension
+array nor by a call in harness code with its comments stripped — `src/packages/matrix.mjs` is kept OUT of
+the code corpus, so the matrix cannot vouch for itself, and a flag counts as taken only when a file that
+actually parses argv spells that literal. What that audit forces into the open is pi's whole extension
+surface: its ExtensionContext accessors, its ExtensionAPI methods (`sendMessage`, `setModel`,
+`getActiveTools`, `registerMcpServer`, `getSettings`, …), its Custom UI class (ctx.ui dialogs, the in-TUI
+editor, autocomplete, theme/renderer knobs), and its CLI verbs this harness does not take (`--export`,
+`--name`, `--credentials`, pi's mcp add/login options) — every one named as shimmed or unsupported with a
+reason, none silently dropped. What that audit now forces into the open is pi's whole extension
 surface: its ExtensionContext accessors, its ExtensionAPI methods (`sendMessage`, `setModel`,
 `getActiveTools`, `registerMcpServer`, `getSettings`, …), and its Custom UI class (ctx.ui dialogs, the
 in-TUI editor, autocomplete, theme/renderer knobs) — all named as shimmed or unsupported with a reason.

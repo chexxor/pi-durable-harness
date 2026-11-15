@@ -1,4 +1,5 @@
-// PROVENANCE: no Durian-Pi original - Durian-Pi's seats each ran the `pi` CLI in a pseudo-terminal (src/seatrun.mjs),
+// PROVENANCE: no Durian-Pi original - Durian-Pi's seats spawned the `pi` CLI as a child process (its src/job-object.mjs
+// owns the spawn),
 // so pi's package plane lived inside that process and there was nothing to load from outside it; this harness
 // loads that plane from outside on demand, which is a different claim and is named here rather than left blank.
 // demo/packages.test.mjs - the offline proof for the pi-package compatibility layer: a pi package is

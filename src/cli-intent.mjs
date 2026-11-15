@@ -68,6 +68,11 @@ export function intent(flags, { cwd = process.cwd() } = {}) {
 		provider: flags?.provider ?? null,
 		instructions: flags?.systemPrompt ?? null,
 		tools: flags?.tools ?? null,
+		// pi's `--thinking <level>` sets pi-durable's ONE conversation-level thinking choice
+		// (Agent.thinkingLevel, dist/harness/types.d.ts AgentState); pi-ai's ModelThinkingLevel is the
+		// vocabulary, and pi-durable rejects a level outside it rather than this file guessing one.
+		...(flags?.thinking ? { thinking: flags.thinking } : { thinking: null }),
+		tools: flags?.tools ?? null,
 		excludeTools: flags?.excludeTools ?? [],
 		faux: flags?.faux ?? null,
 		cwd: at,
@@ -81,13 +86,14 @@ export function intent(flags, { cwd = process.cwd() } = {}) {
  * them, so a fixture cannot smuggle a harness knob through a flag the real CLI does not have.
  * @temp: a value flag with nothing after it is an error, not `undefined`. */
 export function parseFlags(argv, { fixture = [] } = {}) {
-	const a = { messages: [], mode: null, store: null, conversation: null, faux: null, model: null, provider: null, systemPrompt: null, tools: null, excludeTools: [] };
+	const a = { messages: [], mode: null, store: null, conversation: null, faux: null, model: null, provider: null, systemPrompt: null, thinking: null, tools: null, excludeTools: [] };
 	for (let i = 0; i < argv.length; i++) {
 		const t = argv[i];
 		if (t === "-p" || t === "--print") a.print = true;
 		else if (t === "-c" || t === "--continue") a.continue = true;
 		else if (t === "-r" || t === "--resume") a.resume = true;
 		else if (t === "--no-session") a.noSession = true;
+		else if (t === "--thinking") { a.thinking = argv[i + 1]; i++; }
 		else if (t.startsWith("--") && fixture.includes(t.slice(2))) { a[t.slice(2)] = argv[i + 1]; i++; }
 		else if (t.startsWith("--")) {
 			const name = t.slice(2);
@@ -162,6 +168,9 @@ export async function harnessInvocation(flags, { extraExtensions = [], context =
 			// The offline plane is core.mjs's: pi-ai's faux provider, no credentials, no network.
 			model: opened.model ? { provider: opened.provider ?? "faux", modelId: opened.model } : { provider: "faux", modelId: "faux-1" },
 			...(opened.instructions ? { instructions: opened.instructions } : {}),
+		// pi-durable's Agent.thinkingLevel: pi's --thinking verb, no re-implementation of pi-ai's
+		// ThinkingLevel schema here.
+		...(opened.thinking ? { thinkingLevel: opened.thinking } : {}),
 		},
 		...(opened.tools ? { toolNames: opened.tools } : {}),
 		...(opened.excludeTools.length ? { excludeTools: opened.excludeTools } : {}),

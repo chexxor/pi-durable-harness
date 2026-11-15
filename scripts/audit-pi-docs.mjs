@@ -206,26 +206,76 @@ function matrixText() {
  return readFileSync(join(process.cwd(), "src", "packages", "matrix.mjs"), "utf8");
 }
 
-/** Harness source, so "exercised" can be tested as a CALL, not a mention. */
-function harnessCode() {
- const parts = [];
+/** Harness source, so "exercised" can be tested as a CALL, not a mention.
+ *
+ * Two rules keep the claim honest, and both exist because a previous completion audit called the
+ * old version "a gameable proxy":
+ *   - comments and prose are NOT code. The corpus has /* ... *\/ and // comments removed, so a header
+ *     that mentions pi's verb cannot make that verb look exercised. (A URL inside a string literal can
+ *     lose text here; that only ever makes a claim harder, never easier.)
+ *   - src/packages/matrix.mjs is EXCLUDED from the corpus. Its rows are what the matrix bucket already
+ *     reads; leaving it in the code bucket too would let a reason sentence stand in for a call.
+ */
+function codeFiles() {
+ const files = [];
  const walk = (dir, depth = 0) => {
   let entries;
   try { entries = readdirSync(dir); } catch { return; }
   for (const entry of entries) {
    const path = join(dir, entry);
-   if (entry.endsWith(".mjs")) parts.push(readFileSync(path, "utf8"));
+   if (entry.endsWith(".mjs") && !path.includes(join("packages", "matrix.mjs"))) files.push(path);
    else if (depth < 2) walk(path, depth + 1);
   }
  };
  for (const root of ["src", "demo", "scripts"]) walk(root);
- try { parts.push(readFileSync(join(process.cwd(), "cli.mjs"), "utf8")); } catch {}
- return parts.join("\n");
+ const cli = join(process.cwd(), "cli.mjs");
+ try {
+  readFileSync(cli, "utf8");
+  files.push(cli);
+ } catch {
+  /* no CLI in this tree: nothing to add */
+ }
+ return files;
+}
+
+function stripComments(text) {
+ return text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:]):\/\/[^\n]*/g, "$1");
 }
 
 const matrix = matrixText();
-const code = harnessCode();
-const matrixNamesList = (() => { const s = new Set(); for (const m of matrix.matchAll(/names:\s*\[([\s\S]*?)\]/g)) for (const q of m[1].matchAll(/"([^"]+)"|'([^']+)'|`([^`]+)`/g)) { const v = q[1] ?? q[2] ?? q[3]; if (v) s.add(v.trim()); } return s; })();
+const FILES = codeFiles().map((path) => ({ path, text: readFileSync(path, "utf8") }));
+const code = FILES.map((file) => stripComments(file.text)).join("\n");
+
+/** Which flags does THIS harness actually take? Only a quoted flag literal inside a file that parses
+ * argv counts - parseArgs(, a process.argv scan, or an option table compared against tokens. A flag
+ * merely written in a docstring or a matrix reason does not. */
+const PARSED_FLAGS = (() => {
+ const out = new Set();
+ for (const file of FILES) {
+  const isParser = /\bparseArgs\(|process\.argv|argv\[/.test(file.text);
+  if (!isParser) continue;
+  for (const match of file.text.matchAll(/["'`](-{1,2}[A-Za-z][A-Za-z0-9-]*)["'`]/g)) out.add(match[1]);
+  // A table that compares a stripped name: `if (name === "store")` inside a `startsWith("--")` branch.
+  // The flag is the harness's own there, exactly like the quoted "--store" spelling would be.
+  if (/startsWith\("-{1,2}/.test(file.text)) {
+   for (const match of file.text.matchAll(/(?:===|==|case)\s*\(?"([a-z][a-z0-9-]*)"/g)) out.add("--" + match[1]);
+  }
+  for (const match of file.text.matchAll(/["'`](-[A-Za-z])["'`]/g)) out.add(match[1]);
+ }
+ return out;
+})();
+
+const matrixNamesList = (() => {
+ const s = new Set();
+ for (const m of matrix.matchAll(/names:\s*\[([\s\S]*?)\]/g)) {
+  for (const q of m[1].matchAll(/"([^"]+)"|'([^']+)'|`([^`]+)`/g)) {
+   const v = q[1] ?? q[2] ?? q[3];
+   if (v) s.add(v.trim());
+  }
+ }
+ return s;
+})();
+
 
 function escape(token) {
  return token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -234,7 +284,7 @@ function escape(token) {
 /** Does harness code USE this name: called as a member, or imported/declared as a symbol? A flag is
     * used when the harness's own option parser names that flag, which is a literal, not a member call. */
 function usedInCode(name) {
- if (name.startsWith("--")) return code.includes(name) || code.includes(name.slice(2));
+ if (name.startsWith("-")) return PARSED_FLAGS.has(name);
  const bare = name.replace(/^(pi|ctx)\./, "").split(".").pop();
  if (new RegExp(`\\.\\s*${escape(bare)}\\s*\\(`).test(code)) return true;
  if (new RegExp(`\\b${escape(bare)}\\b[,}]`).test(code)) return true; // an import/re-export list

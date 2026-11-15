@@ -1,9 +1,13 @@
 // src/packages/loader.mjs - load the pi packages that src/packages/discover.mjs found, using PI's own
 // loader, and never a loader of ours.
 //
-// PROVENANCE: there is no Durian-Pi file for this: Durian-Pi's seats each ran the `pi` CLI in a
-// pseudo-terminal (~/Git/Durian-Pi/src/seatrun.mjs), so pi's package plane lived inside that process
-// and Durian-Pi never read it. This harness has no pi CLI, so the plane is reached through pi's own
+// PROVENANCE: no Durian-Pi original for reaching pi's package plane as DATA. Durian-Pi's seats spawned
+// the `pi` CLI as a child process (~/Git/Durian-Pi/src/job-object.mjs owns that spawn, `spawnInJob`), so
+// pi's package plane lived inside that process and Durian-Pi never read it. The nearest thing Durian-Pi
+// has is its pi-DURABLE extension loader (~/Git/Durian-Pi/src/extensions.mjs), which states the boundary
+// this file crosses: a pi *coding-agent* extension 'is a different thing (slash commands, a TUI,
+// project-trust prompts) and cannot load here'. This harness loads exactly that different thing, and the
+// rows in src/packages/matrix.mjs name what does not map. This harness has no pi CLI, so the plane is reached through pi's own
 // library exports instead - the same pinned package the CLI runs on. The three entry points used
 // below are re-verified at this pin by `demo/packages.test.mjs` (which is why the demo, not a comment,
 // is what names them); what is NOT used is pi's package MANAGER (`DefaultPackageManager.install`),

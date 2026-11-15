@@ -3,12 +3,14 @@
 //
 // PROVENANCE: this is the file Durian-Pi had no equivalent of. Its seats ran the `pi` CLI, so pi's own
 // extension API was already wired to pi's own registry inside that process, and Durian-Pi only ever
-// supplied the adapter it owned (~/Git/Durian-Pi/src/adapter.mjs: `HarnessOptions`, the compaction and
-// progress policies, restart discipline) - which is what src/core.mjs carries. What Durian-Pi DOES
-// contribute here is the shape of a pi-DURABLE extension: the read of
-// ~/Git/Durian-Pi/src/adapter.mjs and its README note that "a file tool without an environment has
-// `api.env` undefined and every call fails" is why the tool bridge below checks the environment rather
-// than assuming one. Dropped: seats, per-seat adapters, broker spool rules.
+// supplied the durable runtime it owned (~/Git/Durian-Pi/src/tui/durable/adapter.mjs: `createDurableTuiRuntime`,
+// the HarnessOptions, compaction/progress policies and restart discipline, which is what src/core.mjs carries;
+// its src/seattools.mjs owns the `HarnessOptions.env` builder). What Durian-Pi DOES contribute here is the
+// shape of a pi-DURABLE extension: ~/Git/Durian-Pi/src/extensions.mjs documents that an extension is a plain
+// module default-exporting `defineExtension({name, sections, tools, hooks, tasks, wraps})` - installed
+// 'exactly as you would a dependency', with no auto-discovery - and src/seattools.mjs' env builder is why
+// the tool bridge below checks the environment rather than assuming one (a tool whose env is undefined fails,
+// it does not quietly get a default cwd). Dropped: seats, per-seat adapters, broker spool rules.
 //
 // THE HONEST BOUNDARY, stated where the mapping happens rather than in a README: pi and pi-durable are
 // two different session objects. pi's is `AgentSession` with an `ExtensionContext` whose actions come

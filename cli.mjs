@@ -1,13 +1,19 @@
 // cli.mjs - print, JSON, and RPC modes over the one harness core.
 //
 // PROVENANCE: the entry seam (one entry point, mode chosen by flags, JSON out) is Durian-Pi's
-// src/cli-seam.mjs and src/intent.mjs, read 2026-11-14 at pin v1.5.1. Flag names follow pi 1.5.2's
-// real CLI (verified with `pi --help` and docs/cli.md) so the verbs a user already knows keep working.
+// src/cli-seam.mjs and Durian-Pi's flag parser src/tui/durable/cliargs.mjs (the rule that an UNKNOWN FLAG
+// IS REJECTED, NOT IGNORED), both read 2026-11-14 at pin v1.5.1. Flag names follow the CLI docs INSIDE the
+// pinned package - node_modules/@earendil-works/pi-coding-agent/docs/cli.md at v1.5.1, the same file
+// scripts/audit-pi-docs.mjs reads - so the verbs a user already knows keep working; the `pi` binary on this
+// machine is one tag ahead (1.5.2) and is NOT what this harness follows. pi's verbs that this harness does
+// not take are named in docs/package-support.md rather than silently dropped.
 // Two pi verbs cannot be matched and are named in docs/package-support.md: pi keeps one session FILE
 // per session (here one SQLite store per directory, so --session-dir becomes --store) and pi's `--fork`
 // is Conversation.fork(), not a file copy. Seats, broker, cross-seat queue, genlock, per-item worktrees,
 // metrics, check, constitution, selfdev: dropped outright - this harness is single-agent.
 import { readFileSync } from "node:fs";
+// pi-ai's OWN thinking vocabulary - `--thinking` is checked against it rather than a list typed here.
+import { MODEL_THINKING_LEVELS } from "@earendil-works/pi-ai/providers/model-schema";
 import { join } from "node:path";
 import { claimWriter, releaseWriter, readOwner } from "./src/ownership.mjs";
 import { serveOwner, request } from "./src/attach.mjs";
@@ -32,16 +38,19 @@ const HELP = `pi-durable-harness [options] [--] [prompt words...]
   --tools <list>          comma list of tool names
   --exclude-tools <list>  comma list of tool names to drop
   --no-tools              no tools
+  --thinking <level>      thinking level for the conversation (pi-durable's Agent.thinkingLevel)
   --faux <text>           offline scripted reply (demo/CI; no keys, no network)
   --attach                force attach to a running owner as a reader
   --hold <ms>             stay open after a print turn (so others can attach)
+  --version               the pinned release this harness resolves, and exit
   --help                  this text`;
 
 export function parseArgs(argv) {
   const a = { appendSystem: [], messages: [] };
   for (let i = 0; i < argv.length; i++) {
     const t = argv[i];
-    if (t === "--help" || t === "-h") a.help = true;
+    if (t === "--version") a.version = true;
+    else if (t === "--help" || t === "-h") a.help = true;
     else if (t === "-p" || t === "--print") a.print = true;
     else if (t === "-c" || t === "--continue" || t === "-r" || t === "--resume") a.continue = true;
     else if (t === "--no-session") a.noSession = true;
@@ -63,6 +72,11 @@ export function parseArgs(argv) {
       else if (name === "provider") { a.provider = value; i++; }
       else if (name === "system-prompt") { a.systemPrompt = value; i++; }
       else if (name === "append-system-prompt") { a.appendSystem.push(value); i++; }
+      else if (name === "thinking") {
+        if (!MODEL_THINKING_LEVELS.includes(value)) throw new Error(`--thinking needs one of ${MODEL_THINKING_LEVELS.join(", ")}; got ${value}`);
+        a.thinking = value;
+        i++;
+      }
       else if (name === "tools") { a.tools = value.split(","); i++; }
       else if (name === "exclude-tools") { a.excludeTools = value.split(","); i++; }
       else if (name === "faux") { a.faux = value; i++; }
@@ -74,6 +88,15 @@ export function parseArgs(argv) {
   if (a.mode && !["text", "json", "rpc"].includes(a.mode)) throw new Error(`--mode must be text, json, or rpc; got ${a.mode}`);
   if (a.mode === "rpc" && !a.messages.length) a.mode = "rpc";
   return a;
+}
+
+/** What release is this harness running on? The pin file and package.json, both on disk: pi's `--version`
+ * verb, answered from the pinned plane rather than from the network. */
+function releaseLine() {
+ const pin = JSON.parse(readFileSync(join(process.cwd(), "pi-main.pin.json"), "utf8"));
+ const pkg = JSON.parse(readFileSync(join(process.cwd(), "package.json"), "utf8"));
+ const deps = Object.entries(pkg.dependencies ?? {}).filter(([name]) => name.startsWith("@earendil-works/"));
+ return `pin ${pin.ref} (${String(pin.sha).slice(0, 12)}) - ${deps.length} @earendil-works packages declared, ${deps.map(([, spec]) => spec.split("@").pop()).join("/")}`;
 }
 
 function answerText(entries) {
@@ -96,6 +119,7 @@ async function attachAsReader(owner) {
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) { console.log(HELP); return; }
+  if (args.version) { console.log(releaseLine()); return; }
   const cwd = args.cwd ?? process.cwd();
   const store = args.store ?? join(cwd, "harness.sqlite");
 

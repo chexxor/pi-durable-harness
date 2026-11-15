@@ -1,7 +1,7 @@
 // src/packages/discover.mjs - find the pi packages that exist on THIS machine, without pi's CLI.
 //
-// PROVENANCE: no Durian-Pi original. Durian-Pi's seats ran the `pi` CLI (src/seatrun.mjs), so pi's
-// package plane lived inside that process and Durian-Pi never read it. This file therefore re-derives
+// PROVENANCE: no Durian-Pi original. Durian-Pi's seats spawned the `pi` CLI as a child (its src/job-object.mjs
+// owns the spawn), so pi's package plane lived inside that process and Durian-Pi never read it as data. This file therefore re-derives
 // the plane from pi's OWN documented layout at this pin, read from two agreeing places:
 // node_modules/@earendil-works/pi-coding-agent/dist/core/package-manager.d.ts (`ResolvedPaths`,
 // `ConfiguredPackage`, `PackageInstallFailure`) and the packages actually installed on this machine,
