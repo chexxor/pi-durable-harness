@@ -28,6 +28,7 @@ import { createSyncState, advanceSync, snapshotSync, openWatch, mergeView } from
 import { buildFrame, paint, renderFrame, overlayRow, classifyRow, INPUT_MARK } from "../src/tui/frame.mjs";
 import { createViewMode } from "../src/tui/viewmode.mjs";
 import { createUiDriver, decodeKeys, DRIVER_KEYS } from "../src/tui/driver.mjs";
+import { serveOwner, request } from "../src/attach.mjs";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 
 const checks = [];
@@ -168,7 +169,38 @@ async function main() {
  const quitResult = await driver.noteData("q");
  record(quitResult.quit === "q", "q quits, and pi-tui's key names drive the machine", `quit=${JSON.stringify(quitResult)}`);
 
- // 7) The row vocabulary stays pi-durable's: kinds come from pi-durable's entry tokens, not our strings.
+  // 6b) The round trip: a SUBMITTED line leaves the TUI and enters the durable session through the
+ //     owner's attach socket, and the SAME view the TUI paints gains the committed entry. The viewer is
+ //     never the writer - it holds a readOnly store - so this check is the interactive surface driving
+ //     pi-durable's mutation line instead of a TUI that only echoes what it saw.
+ const sockPath = join(root, "owner.sock"); // a short name keeps the socket path under the sun-path limit
+ const owner = serveOwner({ harness: writer.harness, conversation: writer.conversation, context: writer.context }, sockPath);
+ const beforeRows = snapshotSync(syncState, { conversationId }).items;
+ const ack = await request(sockPath, "prompt", { text: "fix the note", requestId: "tui-round-trip" });
+ record(ack.ok === true && ack.requestId === "tui-round-trip",
+  "a submitted line is handed to the OWNING session over the attach socket, not written by the viewer",
+  JSON.stringify(ack));
+ const again = await request(sockPath, "prompt", { text: "fix the note", requestId: "tui-round-trip" });
+ record(again.submissionId === ack.submissionId,
+  "the same requestId lands exactly once, so a client that resends cannot duplicate the input",
+  `first=${JSON.stringify(ack.submissionId)} second=${JSON.stringify(again.submissionId)}`);
+ let afterRows = beforeRows;
+ for (let attempt = 0; attempt < 6 && afterRows.length === beforeRows.length; attempt += 1) {
+  await new Promise((sleep) => setTimeout(sleep, 100));
+  await advanceSync(viewer, syncState, { context: BACKGROUND_CONTEXT });
+  afterRows = snapshotSync(syncState, { conversationId }).items;
+ }
+ record(afterRows.length > beforeRows.length,
+  "the view the TUI paints gains the entry the OWNER committed (one mutation line, seen by a reader)",
+  `before=${beforeRows.length} after=${afterRows.length}`);
+ const gained = afterRows.slice(beforeRows.length).map((item) => item.entry ?? item);
+ const userRow = gained.find((entry) => entry.kind === "pi.user" && JSON.stringify(entry).includes("fix the note"));
+ record(userRow !== undefined,
+  "the typed line commits as a pi.user entry the READER sees, pi-durable's own kind string (the owner's turn may add more rows after it)",
+  `gained=${gained.map((entry) => `${entry.kind}#${entry.id}`).join(",")}`);
+ owner.close();
+
+// 7) The row vocabulary stays pi-durable's: kinds come from pi-durable's entry tokens, not our strings.
  record(knownEntryKinds().includes("pi.user") && knownEntryKinds().includes("pi.tool-result")
   && knownEntryKinds().includes("pi.compaction") && knownEntryKinds().length >= 6,
   "the row vocabulary's kinds are pi-durable's entry tokens' own `kind` strings (rows.mjs imports UserEntry..CompactionEntry and reads `.kind`), not strings this harness typed",

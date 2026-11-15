@@ -26,11 +26,16 @@ import { openStore, listConversations } from "../src/readapi.mjs";
 import { createSyncState, advanceSync, snapshotSync } from "../src/tui/sync.mjs";
 import { renderFrame, rowComponent } from "../src/tui/frame.mjs";
 import { createUiDriver, DRIVER_KEYS } from "../src/tui/driver.mjs";
+import { request, ownerAlive } from "../src/attach.mjs";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { parseArgs } from "node:util";
 
 const { positionals: positionals, values: values } = parseArgs({ allowPositionals: true, strict: false, allowShort: true });
 const storePath = values["store"] ?? positionals[0];
+// --writer-socket: the socket the OWNING session serves (see demo/attach-writer.mjs and docs/attach.md).
+// Given one, a submitted line is handed over that transport and lands on the owner's mutation line
+// exactly once by requestId; without one, the viewer prints the command for the writer it cannot be.
+const writerSocket = values["writer-socket"];
 if (!storePath) {
  console.error("usage: node demo/tui-interactive.mjs --store <path.sqlite> [--conversation <id>]\n" +
   Object.entries(DRIVER_KEYS).map(([verb, keys]) => `${verb}: ${keys.join(" / ")}`).join("\n") +
@@ -73,10 +78,21 @@ const driver = createUiDriver({
  },
  paint: async (state, { width, height }) => await paintState(),
  pollMs: 700,
- onInput: (line) => {
-  // A viewer does not write durable state: the writer owns the store's mutation line (docs/attach.md), so
-  // the typed line is printed as the command that `cli.mjs` (the writer) should be given instead.
-  console.log(`to send this line, ask the writer: cli.mjs --store ${storePath} --conversation ${conversationId} -p ${JSON.stringify(line)}`);
+ onInput: async (line) => {
+  // The viewer never writes durable state itself: the OWNING session holds the store's mutation line
+  // (docs/attach.md). With --writer-socket the typed line goes over that transport, where pi-durable's
+  // SubmissionDraft requestId makes a resend land exactly once; the viewer's next paint then shows the
+  // row the owner committed.
+  if (writerSocket && await ownerAlive(writerSocket)) {
+   try {
+    const ack = await request(writerSocket, "prompt", { text: line, requestId: `tui-${process.pid}-${Date.now()}` });
+    console.log(`the owner accepted it: requestId=${ack.requestId} submissionId=${ack.submissionId} status=${ack.status}`);
+   } catch (err) {
+    console.log(`the owner refused it: ${err?.message ?? err}`);
+   }
+   return;
+  }
+  console.log(`no live owner socket (pass --writer-socket <path>); the writer would be given: cli.mjs --store ${storePath} --conversation ${conversationId} -p ${JSON.stringify(line)}`);
  },
  onExit: (reason) => {
   screen.clear();

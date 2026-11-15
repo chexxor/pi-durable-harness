@@ -84,3 +84,9 @@ node cli.mjs -p "as a reader"    # attaches; it reads the owner's committed stat
 ```
 
 `demo/attach-writer.mjs` and `demo/attach-reader.mjs` are the two-process fixture the suite runs.
+
+The same transport is how the TUI gets a turn: `demo/tui-interactive.mjs --writer-socket <path>` is a
+READER (it holds a readOnly store), and a submitted line goes to the owner's `prompt` command, where
+pi-durable's `SubmissionDraft.requestId` makes a resend land exactly once. `demo/tui.test.mjs` proves the
+whole round trip headless - typed line -> overlay submit -> socket -> one committed submission -> the
+view the TUI paints gains that `pi.user` row on the next paint.

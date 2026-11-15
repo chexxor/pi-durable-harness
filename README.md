@@ -34,7 +34,7 @@ Then the four CLI surfaces, each proved by `demo/cli.test.mjs` and `demo/tui.tes
 node cli.mjs -p "hello"                    # print mode: stdout is the final answer text only
 node cli.mjs --mode json -p "hello"        # NDJSON: pi-durable's own entries, one per line
 node cli.mjs --mode rpc                    # JSONL commands on stdin (status config read prompt watch abort compact)
-node demo/tui-interactive.mjs --store harness.sqlite   # the pi-tui viewer over a store
+node demo/tui-interactive.mjs --store harness.sqlite --writer-socket <the owner's socket>
 ```
 
 All four open the SAME harness-invocation path (`src/cli-intent.mjs`), so the difference between them
@@ -113,8 +113,8 @@ ledger separate from pi-durable's usage plane, and classifies endpoints (loopbac
 
 The pi package ecosystem is reused through pi's own library exports, and every capability pi has that
 pi-durable does not is **named** rather than quietly dropped: [docs/package-support.md](docs/package-support.md)
-is generated from `src/packages/matrix.mjs` by `scripts/render-matrix.mjs` — 55 rows
-(8 native / 17 shimmed / 30 unsupported), evidence per row, plus the packages actually installed on
+is generated from `src/packages/matrix.mjs` by `scripts/render-matrix.mjs` — 75 rows
+(8 native / 27 shimmed / 40 unsupported), evidence per row, plus the packages actually installed on
 this machine and what loaded from them. `src/packages/loader.mjs` uses pi's `DefaultResourceLoader`,
 `discoverAndLoadExtensions` and `loadProjectContextFiles`; `src/packages/adapter.mjs` maps pi's
 `registerTool`, `tool_call`/`tool_result`/provider/compaction handlers, skills, prompts, themes and
@@ -122,8 +122,13 @@ context files onto pi-durable's `defineExtension`/`defineTool`/`hook`/`section`.
 `demo/packages.test.mjs` (35 checks) proves the shim runs end to end on a fixture package and on the
 four real pi packages installed here. `scripts/audit-pi-docs.mjs` re-reads pi's OWN docs inside the
 pinned package (packages.md, extensions.md, rpc.md, cli.md, sessions.md, compaction.md), harvests the
-capabilities they enumerate (136 of them), and fails if any is named by neither a matrix row nor harness
-code — so the matrix above is checked against pi's docs, not against a list someone remembered.
+capabilities they enumerate (213 of them), and fails if any is named by neither a matrix row's `names`
+array nor (for a flag this harness itself takes) by the option parser — so the matrix above is checked
+against pi's docs, not against a list someone remembered, and a reason sentence that happens to mention
+pi's verb never counts as covering it. What that audit now forces into the open is pi's whole extension
+surface: its ExtensionContext accessors, its ExtensionAPI methods (`sendMessage`, `setModel`,
+`getActiveTools`, `registerMcpServer`, `getSettings`, …), and its Custom UI class (ctx.ui dialogs, the
+in-TUI editor, autocomplete, theme/renderer knobs) — all named as shimmed or unsupported with a reason.
 
 ## Layout
 

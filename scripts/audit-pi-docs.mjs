@@ -1,47 +1,44 @@
 #!/usr/bin/env node
-// PROVENANCE: no Durian-Pi original - Durian-Pi never audited pi's own docs against a capability matrix
-// (its package plane was seat-scoped); this file is ours, and its job is to make the matrix's coverage
-// claim falsifiable. It answers the objective's own verification step: "re-read pi's docs packages.md /
-// extensions.md / rpc.md / cli.md / sessions.md / compaction.md and confirm each capability is either
-// exercised by a demo id cited in docs/package-support.md or listed there as unsupported with a reason".
-// scripts/audit-pi-docs.mjs - what pi's OWN docs (inside the pinned package on THIS machine) call a
+// PROVENANCE: no Durian-Pi original - Durian-Pi never re-read pi's own docs against a capability matrix
+// (its seats ran the `pi` CLI, so pi's capability surface belonged to pi's own process and was never
+// enumerated); this file is ours, and its job is to make docs/package-support.md's coverage claim falsifiable.
+// It answers the objective's own verification step: "re-read pi's docs packages.md / extensions.md / rpc.md
+// / cli.md / sessions.md / compaction.md and confirm each capability is either exercised by a demo id cited
+// in docs/package-support.md or listed there as unsupported with a reason".
+// scripts/audit-pi-docs.mjs - what pi's OWN docs (inside the pinned package on THIS machine) enumerate as a
 // capability, against what this harness's matrix and code claim.
 //
-// WHY THE HARVEST IS GROUNDED, AND WHY SCOPED: a capability list typed into this file is the same kind of
-// claim as the matrix, and it goes stale the first time pi's docs change - so the audit reads pi's docs
-// here. But "every identifier a doc mentions" is not "every capability": pi's docs are full of example
-// identifiers (`my_tool`, `lookup_weather`) and internal component types (`OverlayHandle`,
-// `PowerShellToolDetails`), and calling those "capabilities" would turn the audit into a noise machine.
-// A capability here therefore has to pass TWO gates:
-//   1. it sits in the part of a doc that ENUMERATES the surface pi offers to the outside world - pi's
-//      "Available Imports" section, its Events section, its manifest kinds, its RPC command reference,
-//      its compaction settings, its session flags; and
-//   2. pi's own pinned dist contains it (as a quoted literal or an exported name) - so the thing named is
-//      an API pi really ships, not prose or an example.
-// Coverage then asks two questions of every survivor: does a matrix row NAME it, or does some harness
-// source file USE it? Both are asked about the same identifier, so a covered row cannot be prose that
-// merely looks related.
-
+// WHY THE HARVEST IS GROUNDED, AND WHY THE SCOPE IS WHAT IT IS: a capability list typed into this file is
+// the same kind of claim as the matrix, and it goes stale the first time pi's docs grow - so the audit reads
+// pi's docs here. But "capability" has to mean something, and the two wrong meanings are visible in pi's docs:
+// (a) "every identifier a doc mentions" turns example names (`my_tool`, `lookup_weather`) and internal types
+// into requirements, and (b) a scope chosen to fit the matrix is unfalsifiable. So a capability here passes
+// TWO gates: it sits in a part of a doc that ENUMERATES the surface pi offers an extension (pi's "Available
+// Imports", the sub-headings of its "ExtensionContext"/"ExtensionCommandContext"/"ExtensionAPI Methods"/
+// "Custom UI"/"MCP Servers" sections, its Events section, its manifest kinds, its RPC reference, its CLI flag
+// tables), and pi's own pinned dist ships the name (a quoted literal or an exported name) - except for CLI
+// flags, which are a documented verb rather than a symbol, so their shape is the gate.
+//
+// COVERAGE IS ASKED HONESTLY: a capability counts as exercised only when harness code CALLS it (`.name(` as a
+// member, or the symbol appears in an import list) - not when the word merely shows up in prose. Otherwise a
+// reason sentence mentioning `sendMessage` would count as exercising pi's sendMessage.
 import { readdirSync, readFileSync, globSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 
 const PI_PKG = join("@earendil-works", "pi-coding-agent");
 const DOCS = ["packages.md", "extensions.md", "rpc.md", "cli.md", "sessions.md", "compaction.md"];
+// pi's extension docs import across four packages, so the grounding vocabulary does too: a name pi's pinned
+// release ships anywhere in these packages is a real API, and a name it ships nowhere is prose or an example.
+const DIST_PKGS = ["pi-coding-agent", "pi-ai", "pi-tui", "chord"];
 
-/** Every quoted string literal in the pinned pi-coding-agent dist - the vocabulary pi really ships. */
-function distLiterals() {
- const literals = new Set();
+/** Every name the pinned pi packages export, harvested from the dist .d.ts `export { ... } from "./x.ts"` lines. */
+function exportedNames() {
  const names = new Set();
- const files = globSync(`node_modules/${PI_PKG}/dist/**/*.js`);
- for (const file of files) {
+ for (const pkg of DIST_PKGS) {
+  const index = join("node_modules", pkg, "dist", "index.d.ts");
   let text;
-  try { text = readFileSync(file, "utf8"); } catch { continue; }
-  for (const match of text.matchAll(/["'`]([A-Za-z_][A-Za-z0-9_.:-]{1,60})["'`]/g)) literals.add(match[1]);
- }
- // The public surface, from the dist's own index.d.ts re-export lines.
- const index = `node_modules/${PI_PKG}/dist/index.d.ts`;
- try {
-  for (const line of readFileSync(index, "utf8").split("\n")) {
+  try { text = readFileSync(index, "utf8"); } catch { continue; }
+  for (const line of text.split("\n")) {
    if (!/^export \{/.test(line)) continue;
    const inner = line.replace(/^export \{/, "").replace(/\} from .*$/, "");
    for (const part of inner.split(",")) {
@@ -49,14 +46,46 @@ function distLiterals() {
     if (/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name)) names.add(name);
    }
   }
- } catch {}
- return { literals, names };
+ }
+ return names;
 }
 
-const dist = distLiterals();
+/** Every name pi's pinned dist SHIPS as an API surface, in three shapes:
+ *  - quoted literals (how pi spells its own events, entry kinds and settings keys),
+ *  - exported names (the public symbol list in each dist index.d.ts),
+ *  - member calls / method declarations / object keys inside the dist sources - which is where an
+ *    ExtensionAPI METHOD like `sendMessage` lives: it is a member of pi's ExtensionAPI object, not an
+ *    exported symbol, so a gate on exports alone quietly drops half of pi's documented methods.
+ */
+function distVocab() {
+ const literals = new Set();
+ const members = new Set();
+ const declared = new Set();
+ for (const pkg of DIST_PKGS) {
+  const dir = join("node_modules", "@earendil-works", pkg, "dist");
+  const files = [...globSync(`${dir}/**/*.js`), ...globSync(`${dir}/**/*.d.ts`)];
+  for (const file of files) {
+   let text;
+   try { text = readFileSync(file, "utf8"); } catch { continue; }
+   for (const match of text.matchAll(/["'`]([A-Za-z_][A-Za-z0-9_.:-]{1,60})["'`]/g)) literals.add(match[1]);
+   for (const match of text.matchAll(/\.([a-z_$][A-Za-z0-9_]*)\s*[[(\(/]/g)) members.add(match[1]);
+   for (const match of text.matchAll(/^\s{2,}([a-z_$][A-Za-z0-9_]*)\s*[[(\(/:]/gm)) members.add(match[1]);
+   for (const match of text.matchAll(/^export (?:interface|class|type|const|declare const|declare)\s+([A-Za-z_$][A-Za-z0-9_]*)/gm)) declared.add(match[1]);
+  }
+ }
+ return { literals, members, declared };
+}
 
-/** The identifiers inside one doc section, between a heading and the next heading of the same or higher level. */
-function sectionTokens(doc, headingPattern, level) {
+const NAMES = exportedNames();
+const VOCAB = distVocab();
+const LITERALS = VOCAB.literals;
+const MEMBERS = VOCAB.members;
+const DECLARED = VOCAB.declared;
+
+
+
+/** The lines of one doc section: from a heading of `level` to the next heading of that level or higher. */
+function sectionLines(doc, headingPattern, level) {
  const text = readFileSync(join("node_modules", PI_PKG, "docs", doc), "utf8");
  const lines = text.split("\n");
  const out = [];
@@ -65,101 +94,121 @@ function sectionTokens(doc, headingPattern, level) {
   const match = /^#{1,6} /.test(line) ? line.match(/^(#{1,6}) (.*)$/) : null;
   if (match) {
    const depth = match[1].length;
-   if (new RegExp(headingPattern).test(match[2]) && depth === level) { inside = true; continue; }
-   if (inside && depth <= level) { inside = false; continue; }
+   if (depth === level && new RegExp(headingPattern).test(match[2])) { inside = true; continue; }
+   if (inside && depth <= level) inside = false;
   }
-  if (!inside) continue;
-  for (const tick of line.matchAll(/`([^`]+)`/g)) out.push(tick[1]);
-  for (const flag of line.matchAll(/(?:^|\s)(--[a-z][a-z-]{1,30})\b/g)) out.push(flag[1]);
+  if (inside) out.push(line);
  }
  return out;
 }
 
-/** All backticked tokens anywhere in a doc (used only with a strict shape filter below). */
-function docTokens(doc) {
- const text = readFileSync(join("node_modules", PI_PKG, "docs", doc), "utf8");
- return [...text.matchAll(/`([^`]+)`/g)].map((match) => match[1]);
+/** Sub-headings inside a section, as pi writes them (`pi.sendMessage(content, options?)`, `ctx.ui`). */
+function sectionHeadings(doc, headingPattern, level) {
+ return sectionLines(doc, headingPattern, level).filter((line) => /^#{1,6} /.test(line)).map((line) => line.replace(/^#{1,6} /, ""));
 }
 
-/** Documented CLI flags, harvested from the raw doc text (pi's CLI tables write flags bare, not backticked). */
+/** All backticked tokens in a doc. */
+function docTokens(doc) {
+ return [...readFileSync(join("node_modules", PI_PKG, "docs", doc), "utf8").matchAll(/`([^`]+)`/g)].map((match) => match[1]);
+}
+
+/** Documented CLI flags (pi's CLI tables write flags bare, not backticked). */
 function docFlags(doc) {
  const text = readFileSync(join("node_modules", PI_PKG, "docs", doc), "utf8");
  return [...text.matchAll(/(?:^|\s|`|\|)(--[a-z][a-z-]{1,30})\b/gm)].map((match) => match[1]);
 }
 
-/** The capability set per doc: (doc, capability, why-it-counts), already gated on pi's own dist. */
-function capabilities() {
- const rows = [];
- const push = (doc, capability, gate, ungrounded = false) => {
-  if (!capability) return;
-  const token = capability.trim();
-  if (token.length < 2 || token.length > 60) return;
-  // `ungrounded` is for pi's USER surface (CLI flags): a flag is a documented verb, not an exported
-  // symbol, so there is no dist literal to find - the flag's shape and pi's doc table are the gate.
-  const isLiteral = dist.literals.has(token) || dist.names.has(token)
-   || dist.literals.has(token.replace(/^--/, "")) || ungrounded;
-  if (!isLiteral) return; // prose, an example, or a name pi's pinned release does not ship
-  rows.push({ doc, capability: token, gate });
- };
+const rows = [];
+const seenRow = new Set();
+const rejected = [];
+const push = (doc, capability, gate, ungrounded = false, viaCode = false) => {
+ if (!capability) return;
+ const token = capability.trim();
+ if (token.length < 3 || token.length > 60) return;
+ if (seenRow.has(`${doc}:${token}`)) return; // pi's docs repeat a name; a capability is counted once
+ seenRow.add(`${doc}:${token}`);
+ const bare = token.replace(/^(pi|ctx)\./, "").split(".").pop();
+ const grounded = LITERALS.has(token) || LITERALS.has(bare) || NAMES.has(bare) || MEMBERS.has(bare) || DECLARED.has(bare) || DECLARED.has(token) || ungrounded;
+ if (!grounded) return; // prose, an example, or a name pi's pinned release does not ship
+ rows.push({ doc, capability: token, gate, viaCode });
+};
 
- // extensions.md: the API pi offers an extension ("Available Imports") + pi's event names (Events section).
- for (const token of sectionTokens("extensions.md", "Available Imports", 2)) push("extensions.md", token, "pi's Available Imports section");
- // Only the event SHAPE counts here: pi's Events section also backticks handler field names (`handled`,
- // `operations`) and file names (`trust.json`), which are not capabilities pi offers the outside world.
- for (const token of sectionTokens("extensions.md", "Events", 2)) {
-  if (!/^[a-z][a-z0-9_]*(?:_[a-z0-9]+)+$/.test(token)) continue;
-  push("extensions.md", token, "pi's Events section (handler events)");
- }
- // The event names ALSO appear as headings deep in that doc; take the snake_case ones pi's dist quotes.
- for (const token of docTokens("extensions.md")) {
-  if (/^[a-z][a-z0-9_]*(_[a-z0-9]+)+$/.test(token)) push("extensions.md", token, "an event name pi's dist quotes");
- }
-
- // packages.md: the manifest kinds a package may declare, and the package commands pi runs.
- for (const token of sectionTokens("packages.md", "Select package resources", 2)) push("packages.md", token, "pi's manifest-resource vocabulary");
- for (const token of sectionTokens("packages.md", "Install and manage packages", 2)) {
-  if (/^[a-z][a-z-]+$/.test(token)) push("packages.md", token, "pi's package commands");
- }
-
- // rpc.md: the commands the RPC protocol answers, and the record kinds it frames with.
- for (const token of sectionTokens("rpc.md", "Reference", 2)) push("rpc.md", token, "pi's RPC reference");
- for (const token of sectionTokens("rpc.md", "Protocol records", 3)) push("rpc.md", token, "pi's RPC record shapes");
-
- // cli.md + sessions.md: the flags pi's CLI documents. No dist-literal gate here: pi's CLI flags are a
- // user surface (a table in a doc), not an exported symbol, so the shape IS the gate - and the placeholder
- // names pi uses in its examples (`--my-flag`) are filtered out by name rather than by an API check.
- for (const doc of ["cli.md", "sessions.md", "rpc.md", "packages.md"]) {
-  for (const token of docFlags(doc)) {
-   if (/my|example|foo|bar/.test(token)) continue;
-   push(doc, token, "a flag pi's CLI docs document", true);
+/** A pi method name as written in a heading: `pi.sendMessage(content, options?)` -> `sendMessage`. */
+function methodNames(headings) {
+ const out = [];
+ for (const heading of headings) {
+  for (const piece of heading.split("/")) {
+   const trimmed = piece.trim();
+   const dotted = trimmed.match(/^(?:pi|ctx)\.([a-zA-Z][A-Za-z0-9_.]*)/);
+   if (dotted) { out.push(dotted[1]); continue; }
+   const bare = trimmed.match(/^([a-z][A-Za-z0-9_]*)\(/);
+   if (bare) out.push(bare[1]);
   }
  }
+ return out;
+}
 
- // compaction.md: the settings keys and entry kinds compaction is configured by.
- for (const token of docTokens("compaction.md")) {
-  if (/^[A-Z][A-Za-z0-9]*Entry$/.test(token)) push("compaction.md", token, "a session entry kind compaction writes");
-  if (/^(enabled|reserveTokens|keepRecentTokens|backgroundTokens|modelOverrides|branchSummary|maxRetries|baseDelayMs|maxAgentDelayMs|keepRecent)$/.test(token)) push("compaction.md", token, "a compaction/summarization settings key");
+// ---- extensions.md: the surface pi offers an extension ----
+// pi's own import list, its handler events, and the method surfaces its sections enumerate by heading.
+for (const section of ["Events", "ExtensionContext", "ExtensionCommandContext", "ExtensionAPI Methods", "MCP Servers", "Custom Tools", "State Management"]) {
+ for (const heading of sectionHeadings("extensions.md", section, 2)) {
+  for (const name of methodNames([heading])) push("extensions.md", name, `pi's ${section} section (a documented method)`);
  }
-
- const seen = new Set();
- return rows.filter((row) => {
-  const key = `${row.doc}:${row.capability}`;
-  if (seen.has(key)) return false;
-  seen.add(key);
-  return true;
- });
+}
+// The dotted calls pi's own examples write (`ctx.ui.select(...)`, `pi.sendUserMessage(...)`) - this is how
+// pi's Custom UI and dialog API is spelled, where the headings are prose ("Dialogs", "Widgets, Status, and
+// Footer") and only the code says the name.
+for (const section of ["ExtensionContext", "ExtensionCommandContext", "Custom UI", "Custom Tools", "MCP Servers", "Dynamic Tool Loading"]) {
+ for (const line of sectionLines("extensions.md", section, 2)) {
+  for (const match of line.matchAll(/\b(?:pi|ctx)\.([a-z][A-Za-z0-9_]*(?:\.[a-z][A-Za-z0-9_]*)+)\s*\(/g)) push("extensions.md", match[1], `a dotted call pi writes in its ${section} section`);
+ }
+}
+// pi's event names, by shape and grounded on pi's dist quoting them.
+for (const token of docTokens("extensions.md")) {
+ if (/^[a-z][a-z0-9_]*(_[a-z0-9]+)+$/.test(token)) push("extensions.md", token, "an event name pi's dist quotes");
+}
+for (const token of sectionLines("extensions.md", "Events", 2)) {
+ const heading = /^#{1,6} /.test(token) ? token.replace(/^#{1,6} /, "") : null;
+ if (!heading) continue;
+ for (const name of heading.split("/")) if (/^[a-z][a-z0-9_]*(_[a-z0-9]+)+$/.test(name.trim())) push("extensions.md", name.trim(), "pi's Events section (a documented handler event)", true, false);
 }
 
-/** The matrix's own words: capability names, status, reason - what the matrix claims to have covered. */
+// ---- packages.md: manifest kinds and package commands ----
+for (const token of sectionHeadings("packages.md", "Select package resources", 2)) push("packages.md", token, "pi's manifest-resource vocabulary", true, true);
+for (const token of docTokens("packages.md")) {
+ if (/^[a-z]+$/.test(token) && LITERALS.has(token) && ["extensions", "skills", "prompts", "themes", "image"].includes(token)) push("packages.md", token, "a manifest kind pi reads", true, true);
+}
+for (const token of docFlags("packages.md")) push("packages.md", token, "a flag pi's package docs document", true);
+
+// ---- rpc.md: the protocol's records and commands ----
+for (const token of sectionHeadings("rpc.md", "Reference", 2)) push("rpc.md", token, "pi's RPC reference", true, true);
+for (const token of sectionHeadings("rpc.md", "Protocol records", 3)) push("rpc.md", token, "pi's RPC record shapes", true, true);
+for (const token of docFlags("rpc.md")) push("rpc.md", token, "a flag pi's RPC docs document", true, true);
+
+// ---- cli.md / sessions.md / packages.md: pi's user surface ----
+for (const doc of ["cli.md", "sessions.md", "rpc.md", "packages.md"]) {
+ for (const token of docFlags(doc)) {
+  if (/my|example|foo|bar/.test(token)) continue;
+  push(doc, token, "a flag pi's CLI docs document", true, true);
+ }
+}
+
+// ---- compaction.md: the knobs and entry kinds compaction is configured by ----
+for (const token of docTokens("compaction.md")) {
+ if (/^[A-Z][A-Za-z0-9]*Entry$/.test(token)) {
+  push("compaction.md", token, "a session entry kind compaction writes");
+ }
+ if (/^(enabled|reserveTokens|keepRecentTokens|backgroundTokens|modelOverrides|branchSummary|maxRetries|baseDelayMs|maxAgentDelayMs|keepRecent)$/.test(token)) push("compaction.md", token, "a compaction/summarization settings key");
+}
+
+// ---- what the harness actually claims ----
 function matrixText() {
- const path = join(process.cwd(), "src", "packages", "matrix.mjs");
- return readFileSync(path, "utf8");
+ return readFileSync(join(process.cwd(), "src", "packages", "matrix.mjs"), "utf8");
 }
 
-/** Every harness source file, so "exercised" means code that uses the identifier, not prose nearby. */
+/** Harness source, so "exercised" can be tested as a CALL, not a mention. */
 function harnessCode() {
  const parts = [];
- const roots = ["src", "demo", "scripts"];
  const walk = (dir, depth = 0) => {
   let entries;
   try { entries = readdirSync(dir); } catch { return; }
@@ -169,43 +218,74 @@ function harnessCode() {
    else if (depth < 2) walk(path, depth + 1);
   }
  };
- for (const root of roots) walk(root);
+ for (const root of ["src", "demo", "scripts"]) walk(root);
  try { parts.push(readFileSync(join(process.cwd(), "cli.mjs"), "utf8")); } catch {}
  return parts.join("\n");
 }
 
 const matrix = matrixText();
 const code = harnessCode();
+const matrixNamesList = (() => { const s = new Set(); for (const m of matrix.matchAll(/names:\s*\[([\s\S]*?)\]/g)) for (const q of m[1].matchAll(/"([^"]+)"|'([^']+)'|`([^`]+)`/g)) { const v = q[1] ?? q[2] ?? q[3]; if (v) s.add(v.trim()); } return s; })();
 
 function escape(token) {
  return token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-const rows = capabilities();
+/** Does harness code USE this name: called as a member, or imported/declared as a symbol? A flag is
+    * used when the harness's own option parser names that flag, which is a literal, not a member call. */
+function usedInCode(name) {
+ if (name.startsWith("--")) return code.includes(name) || code.includes(name.slice(2));
+ const bare = name.replace(/^(pi|ctx)\./, "").split(".").pop();
+ if (new RegExp(`\\.\\s*${escape(bare)}\\s*\\(`).test(code)) return true;
+ if (new RegExp(`\\b${escape(bare)}\\b[,}]`).test(code)) return true; // an import/re-export list
+ if (new RegExp(`\\b(?:const|let|class|function)\\s+${escape(bare)}\\b`).test(code)) return true;
+ return false;
+}
+
+/** Does a matrix row NAME it? Only the rows' `names:` arrays count, so a reason sentence that merely
+ * mentions pi's verb is not coverage - the claim has to be the claim the row makes. */
+function matrixNames() {
+ const out = new Set();
+ for (const match of matrix.matchAll(/names:\s*\[([\s\S]*?)\]/g)) {
+  for (const quoted of match[1].matchAll(/"([^"]+)"|'([^']+)'|`([^`]+)`/g)) {
+   const value = quoted[1] ?? quoted[2] ?? quoted[3];
+   if (value) out.add(value.trim());
+  }
+ }
+ return out;
+}
+
+const MATRIX_NAMES = matrixNames();
+
+function namedInMatrix(name) {
+ const bare = name.replace(/^(pi|ctx)\./, "").split(".").pop();
+ return MATRIX_NAMES.has(name) || MATRIX_NAMES.has(bare) || MATRIX_NAMES.has(`--${bare}`);
+}
+
+/** `--list` prints the scope that was checked, so a reader can see what the tally is a tally OF. */
+if (process.argv.includes("--list")) {
+ for (const row of rows) console.log(`SCOPE ${row.doc} :: ${row.capability} :: ${row.gate}`);
+}
+
 const uncovered = [];
 const perDoc = {};
 for (const row of rows) {
- const pattern = new RegExp(`\\b${escape(row.capability)}\\b`);
- // A flag is used by the harness when the flag appears WITHOUT its leading dashes in code or matrix text.
- const probe = row.capability.startsWith("--") ? escape(row.capability.slice(2)) : escape(row.capability);
- const named = pattern.test(matrix) || new RegExp(`\\b${probe}\\b`).test(matrix);
- const used = new RegExp(`\\b${probe}\\b`).test(code);
  const bucket = perDoc[row.doc] ??= { covered: 0, total: 0 };
  bucket.total += 1;
- if (named || used) { bucket.covered += 1; continue; }
- bucket.uncovered ??= [];
+ if (namedInMatrix(row.capability)) { bucket.covered += 1; continue; }
+ if (row.viaCode && usedInCode(row.capability)) { bucket.covered += 1; continue; }
  (bucket.uncovered ??= []).push(`${row.capability} (${row.gate})`);
- uncovered.push({ doc: row.doc, capability: row.capability, gate: row.gate });
+ uncovered.push(row);
 }
 
 for (const doc of DOCS) {
- const bucket = perDoc[doc] ?? { covered: 0, total: 0 };
- console.log(`${doc}: ${bucket.covered}/${bucket.total} capabilities from pi's own doc are named by the matrix or used by harness code`);
+ const bucket = perDoc[doc] ?? { covered: 0, total: 0, uncovered: [] };
+ console.log(`${doc}: ${bucket.covered}/${bucket.total} capabilities from pi's own doc are named by the matrix or called by harness code`);
 }
 
 if (uncovered.length) {
- console.log(`PI-DOC AUDIT FAIL: ${uncovered.length} capabilities pi's docs enumerate are neither named by a matrix row nor used by harness code`);
+ console.log(`PI-DOC AUDIT FAIL: ${uncovered.length} capabilities pi's docs enumerate are neither named by a matrix row nor called by harness code`);
  for (const row of uncovered) console.log(`  ${row.doc} :: ${row.capability} :: ${row.gate}`);
  process.exit(1);
 }
-console.log(`PI-DOC AUDIT PASS: ${rows.length} capabilities enumerated by pi's six docs are each named by a matrix row (${matrix.split("\n").filter((line) => /status:/.test(line)).length} rows) or used by harness source`);
+console.log(`PI-DOC AUDIT PASS: ${rows.length} capabilities enumerated by pi's six docs are each named by a matrix row (${matrix.split("\n").filter((line) => /status:/.test(line)).length} rows) or called by harness source`);
