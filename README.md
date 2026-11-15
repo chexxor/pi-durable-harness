@@ -32,13 +32,24 @@ Then the four CLI surfaces, each proved by `demo/cli.test.mjs` and `demo/tui.tes
 
 ```bash
 node cli.mjs -p "hello"                    # print mode: stdout is the final answer text only
-node cli.mjs --mode json -p "hello"        # NDJSON: pi-durable's own entries, one per line
-node cli.mjs --mode rpc                    # JSONL commands on stdin (status config read prompt watch abort compact)
+node cli.mjs --mode json -p "hello"        # NDJSON: pi's session header + event records (docs/json.md)
+node cli.mjs --mode rpc                    # pi's protocol: {"type":"prompt",...} in, {"type":"response",...} out
 node demo/tui-interactive.mjs --store harness.sqlite --writer-socket <the owner's socket>
 ```
 
 All four open the SAME harness-invocation path (`src/cli-intent.mjs`), so the difference between them
-is what is printed, not what is run. `node cli.mjs --store <path>` names the store;
+is what is printed, not what is run.
+
+RPC mode speaks pi's own protocol, and pi's own `RpcClient` (exported by the pinned package) drives it:
+a command is `{id?, type: "<verb>", ...params}` and the answer is `{id?, type: "response", command,
+success, data}` — a failed answer carries pi's `error` and no invented fields. The verbs are pi's 34
+from `rpc-commands.md`, answered on pi-durable's planes (or refused **by name** when pi-durable has no
+plane: `cycle_model`, `set_steering_mode`, `abort_retry`, `abort_bash`, `export_html`, `set_session_name`,
+…), plus four harness-only reads (`status`, `config`, `read`, `watch`) that name durable state. Events
+stream as pi's records from **committed entries only** — no fabricated streaming deltas. stdin is
+bidirectional (each line is answered as it arrives, never drained to EOF), and `SIGTERM`/`SIGINT` clean
+up through the ordinary path: settle what was queued, close the Harness, release the ownership lock.
+`demo/rpc.test.mjs` (50 checks) proves exactly this, with pi's `RpcClient` as the client. `node cli.mjs --store <path>` names the store;
 `--conversation <id>` picks a conversation the last run printed.
 
 ### Attach behavior (one writer, many readers)
@@ -113,29 +124,30 @@ ledger separate from pi-durable's usage plane, and classifies endpoints (loopbac
 
 The pi package ecosystem is reused through pi's own library exports, and every capability pi has that
 pi-durable does not is **named** rather than quietly dropped: [docs/package-support.md](docs/package-support.md)
-is generated from `src/packages/matrix.mjs` by `scripts/render-matrix.mjs` — 82 rows
-(8 native / 32 shimmed / 42 unsupported), evidence per row, plus the packages actually installed on
+is generated from `src/packages/matrix.mjs` by `scripts/render-matrix.mjs` — 94 rows
+(10 native / 34 shimmed / 50 unsupported), evidence per row, plus the packages actually installed on
 this machine and what loaded from them. `src/packages/loader.mjs` uses pi's `DefaultResourceLoader`,
 `discoverAndLoadExtensions` and `loadProjectContextFiles`; `src/packages/adapter.mjs` maps pi's
 `registerTool`, `tool_call`/`tool_result`/provider/compaction handlers, skills, prompts, themes and
 context files onto pi-durable's `defineExtension`/`defineTool`/`hook`/`section`.
 `demo/packages.test.mjs` (35 checks) proves the shim runs end to end on a fixture package and on the
 four real pi packages installed here. `scripts/audit-pi-docs.mjs` re-reads pi's OWN docs inside the
-pinned package (packages.md, extensions.md, rpc.md, cli.md, sessions.md, compaction.md), harvests the
-capabilities they enumerate (213 of them), and fails if any is named by neither a matrix row's `names`
-array nor by a call in harness code with its comments stripped — `src/packages/matrix.mjs` is kept OUT of
-the code corpus, so the matrix cannot vouch for itself, and a flag counts as taken only when a file that
-actually parses argv spells that literal. What that audit forces into the open is pi's whole extension
-surface: its ExtensionContext accessors, its ExtensionAPI methods (`sendMessage`, `setModel`,
-`getActiveTools`, `registerMcpServer`, `getSettings`, …), its Custom UI class (ctx.ui dialogs, the in-TUI
-editor, autocomplete, theme/renderer knobs), and its CLI verbs this harness does not take (`--export`,
-`--name`, `--thinking`, `--skill`/`--theme`, `--json`, `--version`, `--offline`, `--credentials`, pi's
-package-update aliases (`--all`/`--force`/`--self`) and pi's mcp add/login options (`--env`, `--url`,
-`--header`, `--timeout`, `--description`) — every one named as shimmed or unsupported with a reason a
-reader can check against the tree, none silently dropped. What that audit now forces into the open is pi's whole extension
-surface: its ExtensionContext accessors, its ExtensionAPI methods (`sendMessage`, `setModel`,
-`getActiveTools`, `registerMcpServer`, `getSettings`, …), and its Custom UI class (ctx.ui dialogs, the
-in-TUI editor, autocomplete, theme/renderer knobs) — all named as shimmed or unsupported with a reason.
+pinned package — all twelve that enumerate a surface this harness claims: packages.md, extensions.md,
+rpc.md AND rpc-commands.md (pi's 34 RPC verbs), json.md (pi's event records), message-types.md (pi-ai's
+message types), tui.md (pi-tui's components), rpc-extension-ui.md (pi's extension dialogs), session-format.md
+(pi's session-file entry types), cli.md, sessions.md, compaction.md — harvests the 306 capabilities they
+enumerate, and fails if any is named by neither a matrix row's `names` array nor by a call in harness code
+with its comments stripped: `src/packages/matrix.mjs` is kept OUT of that code corpus, so the matrix cannot
+vouch for itself, and a documented flag counts as taken only when a file that actually parses `argv` spells
+that literal. What that audit forces into the open is pi's whole extension surface (its `ExtensionContext`
+accessors and actions, its `ExtensionAPI` methods — `sendMessage`, `setModel`, `getActiveTools`,
+`registerMcpServer`, `getSettings`, …), its Custom UI class (the `ctx.ui` dialogs, the in-TUI editor and
+autocomplete, the renderer/theme knobs, pi-tui's dialog components, and the `extension_ui_request`/
+`extension_ui_response` subprotocol), pi's RPC verb list (answered on pi-durable's planes, or refused by
+name), pi-ai's message types, pi's session-file entry types, and pi's CLI verbs this harness does not take
+(`--export`, `--name`, `--fork`, `--thinking`, `--skill`/`--theme`, `--json`, `--version`, `--offline`,
+`--credentials`, pi's package-update aliases and mcp add/login options) — every one named as native,
+shimmed or unsupported with a reason a reader can check against the tree, none silently dropped.
 
 ## How the work was executed
 
@@ -163,6 +175,12 @@ from the tags.
 | `docs/` | capability matrix, attach semantics, provenance table |
 
 ## Provenance
+
+Every source file carries a header naming the Durian-Pi file it was extracted from — and what was
+changed or omitted — or saying outright that there is no Durian-Pi original. `scripts/audit-provenance.mjs`
+checks that claim against the tree (`PROVENANCE PASS: 87/87 source files carry a header`), and
+`docs/provenance.md` is that audit's output: a table of file → source → what changed, so the extraction is
+re-derivable rather than a paragraph of prose.
 
 ## Was the source repo touched?
 

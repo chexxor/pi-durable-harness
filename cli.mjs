@@ -19,8 +19,16 @@ import { claimWriter, releaseWriter, readOwner } from "./src/ownership.mjs";
 import { serveOwner, request } from "./src/attach.mjs";
 import { handle, commandNames } from "./src/rpc.mjs";
 import { scriptTurn, transcript } from "./src/core.mjs";
-import { harnessInvocation, intent, agentEvent, finalAnswerText, rpcLine, settleInvocation } from "./src/cli-intent.mjs";
-import { readFeed } from "./src/eventfeed.mjs";
+import { harnessInvocation, intent, finalAnswerText, rpcLine, settleInvocation } from "./src/cli-intent.mjs";
+// pi's JSON event records (docs/json.md inside the pinned package) are what --mode json and --mode
+// rpc print, built by src/pievents.mjs from pi-durable's committed entries.
+import { piEventsOf, sessionHeader } from "./src/pievents.mjs";
+// --tui runs the TUI over the conversation THIS process owns (src/tui/writer.mjs); the viewer entrypoint
+// for a store another process owns is demo/tui-interactive.mjs.
+import { openWriterView, writerSubmit } from "./src/tui/writer.mjs";
+import { createUiDriver } from "./src/tui/driver.mjs";
+import { renderFrame, rowComponent } from "./src/tui/frame.mjs";
+import { ProcessTerminal, TuiMainScreen } from "@earendil-works/pi-tui";
 
 const HELP = `pi-durable-harness [options] [--] [prompt words...]
   --cwd <dir>             work in <dir> (default: the directory this ran in)
@@ -41,6 +49,7 @@ const HELP = `pi-durable-harness [options] [--] [prompt words...]
   --thinking <level>      thinking level for the conversation (pi-durable's Agent.thinkingLevel)
   --faux <text>           offline scripted reply (demo/CI; no keys, no network)
   --attach                force attach to a running owner as a reader
+  --tui                   the interactive TUI over this session (this process owns the store)
   --hold <ms>             stay open after a print turn (so others can attach)
   --version               the pinned release this harness resolves, and exit
   --help                  this text`;
@@ -58,6 +67,7 @@ export function parseArgs(argv) {
     else if (t === "--faux") { a.faux = argv[i + 1]; i++; }
     else if (t === "--no-tools") a.noTools = true;
     else if (t === "--attach") a.attach = true;
+    else if (t === "--tui") a.tui = true;
     else if (t.startsWith("--")) {
       const name = t.slice(2);
       const value = argv[i + 1];
@@ -164,11 +174,36 @@ async function main() {
   const parts = await harnessInvocation(flags, { extraExtensions: [] });
   const server = claim ? serveOwner(parts, claim.lock.socket) : null;
   const mode = parts.intent.mode;
+  // A session that stays open (rpc, tui, --hold) answers pi's own shutdown signals by CLEANING UP
+  // rather than dying: the ownership lock is released and the store is left reclaimable, which is the
+  // difference between "the owner quit" and "the owner crashed and its lock still claims the store".
+  let signalled = null;
+  // The session's line reader is made before the surface below, so the signal handler can end the
+  // session rather than kill the process - Node's default SIGTERM handling skips the finally block,
+  // which would leave this process' lock claiming the store forever.
+  const reader = (mode === "rpc" || args.tui) ? stdinReader() : null;
+  const onSignal = (signal) => {
+    if (signalled) return;
+    signalled = signal;
+    console.error(`the session was asked to stop (${signal}); settling what it queued and releasing the store`);
+    reader?.stop();
+  };
+  process.on("SIGTERM", () => onSignal("SIGTERM"));
+  process.on("SIGINT", () => onSignal("SIGINT"));
   try {
-    if (mode === "rpc") {
-      console.log(JSON.stringify({ ok: true, command: "ready", conversationId: parts.conversation.id, commands: commandNames() }));
-      for (const line of readStdinLines()) {
-        const answer = await rpcLine(parts, line);
+    if (args.tui) {
+      await writerTui(parts, args, reader);
+    } else if (mode === "rpc") {
+      // pi's RPC mode is a bidirectional pipe protocol: no session header, one record per line in,
+      // a response record (plus the run's session-event records) out. The `ready` record is this
+      // harness's addition, naming the verbs it answers; pi's own client treats any non-response
+      // line as an event, so an extra record cannot desync it.
+      console.log(JSON.stringify({ type: "ready", conversationId: parts.conversation.id, commands: commandNames() }));
+      while (true) {
+        const item = await reader.next();
+        if (item.done) break;
+        const sink = (event) => console.log(JSON.stringify(event));
+        const answer = await rpcLine(parts, item.value, sink);
         console.log(JSON.stringify(answer));
       }
     } else {
@@ -186,9 +221,12 @@ async function main() {
       await settleInvocation(parts);
       const entries = await transcript(parts.conversation, parts.context, 200);
       if (mode === "json") {
-        // NDJSON of pi-durable's committed entries, oldest first: the record IS the entry (kind, EntryId,
-        // the message the provider saw), so a viewer counts events instead of reconstructing turns.
-        for (const entry of entries.slice().reverse()) console.log(JSON.stringify(agentEvent(entry)));
+        // pi's JSON mode is one session header followed by session events (docs/json.md inside the
+        // pinned package), so that is what is printed: the header names pi-durable's ConversationId
+        // and this store rather than a session FILE, and every event record is built by
+        // src/pievents.mjs from the committed entries - pi-ai's own message objects, unchanged.
+        console.log(JSON.stringify(sessionHeader({ conversationId: parts.conversation.id, cwd, store })));
+        for (const event of piEventsOf(entries.slice().reverse(), { conversationId: parts.conversation.id, settled: true })) console.log(JSON.stringify(event));
       } else {
         const answer = finalAnswerText(entries);
         if (!answer) throw new Error("the run committed no assistant text");
@@ -203,15 +241,113 @@ async function main() {
   await parts.harness.close(parts.context);
 }
 
-function readStdinLines() {
-  // RPC is a pipe protocol: one JSON command per line in, one reply per line out. From a terminal
-  // there is nothing to read, so say what the shape is instead of hanging on a TTY.
+/** A bidirectional line reader: one record per line, answered AS IT ARRIVES, and a `stop()` that
+ * ends the session on demand (a shutdown signal, a TUI quit). pi's json.md framing rules are what
+ * this splits on: "Split records only on LF and strip an optional preceding carriage return", and
+ * "Node.js `readline` is not suitable for this stream because it also recognizes those Unicode
+ * separators" - so the split is spelled here rather than taken from a line reader.
+ *
+ * WHY NOT readFileSync(0): the RPC session is bidirectional - a client that sends one command and
+ * waits for its response must GET the response, and draining stdin to EOF first would deadlock
+ * exactly the client pi's own RpcClient is.
+ */
+function stdinReader() {
+  const state = { buffer: "", lines: [], ended: process.stdin.isTTY ? true : false, wake: null };
   if (process.stdin.isTTY) {
-    console.log('rpc mode reads JSONL on stdin, for example: {"command":"prompt","text":"hello"}');
-    return [];
+    console.log('rpc mode reads JSONL on stdin, for example: {"type":"prompt","message":"hello"}; a TUI session uses --tui instead');
   }
-  // @temp: readFileSync(0) drains a piped stdin in one go, which keeps replies in command order.
-  return readFileSync(0, "utf8").split("\n").filter((line) => line.trim());
+  const notify = () => {
+    const wake = state.wake;
+    state.wake = null;
+    wake?.();
+  };
+  // pi's framing: split only on LF, strip an optional preceding CR, ignore blank lines (json.md).
+  const drain = () => {
+    let index;
+    while ((index = state.buffer.indexOf("\n")) >= 0) {
+      let line = state.buffer.slice(0, index);
+      state.buffer = state.buffer.slice(index + 1);
+      // pi's framing strips an optional CR before the LF (json.md); a blank line is not a command.
+      if (line.endsWith("\r")) line = line.slice(0, -1);
+      if (line.trim()) state.lines.push(line);
+    }
+  };
+  process.stdin.on("data", (chunk) => { state.buffer += String(chunk ?? ""); drain(); notify(); });
+  process.stdin.on("end", () => { state.ended = true; notify(); });
+  return {
+    next: async () => {
+      while (true) {
+        if (state.lines.length) return { done: false, value: state.lines.shift() };
+        if (state.ended) return { done: true };
+        await new Promise((resolve) => { state.wake = resolve; });
+      }
+    },
+    // Ending the session is how a shutdown signal or a TUI quit leaves this process: the caller's loop
+    // returns through its ordinary path, so the lock is released and the Harness closed.
+    stop: () => { state.ended = true; notify(); },
+  };
+}
+
+/** The interactive TUI over the conversation THIS process owns: pi-tui's own screens, this harness's
+ * view planes, and a typed line that goes to Conversation.submit on the store's ONE mutation line
+ * (src/tui/writer.mjs' rule: the writer is the owner, so there is no socket hand-off here).
+ */
+async function writerTui(parts, args, reader) {
+  const view = await openWriterView(parts, { conversationId: parts.conversation.id, context: parts.context });
+  const size = () => ({ columns: process.stdout.columns ?? args.width ?? 80, rows: process.stdout.rows ?? args.height ?? 24 });
+  // The wiring order is pi's own, read from the pinned dist: dist/cli/startup-ui.js builds
+  // `new TuiMainScreen(new ProcessTerminal(), ..., getAgentDir())` and the screens answer `clear()`,
+  // `addChild`, `invalidate()`, `requestRender()`, `stop()`. No escape sequence and no alt-screen
+  // pair is written in this file, which is what makes pi-tui's teardown the exit path.
+  const screen = new TuiMainScreen(new ProcessTerminal(), false, undefined);
+  const typed = [];
+  const painted = [];
+  const paintFrame = async () => {
+    const at = size();
+    const frame = await view.paint({ width: at.columns, height: at.rows });
+    screen.clear();
+    for (const row of frame.rows) screen.addChild(rowComponent(row, { width: at.columns }).component);
+    screen.invalidate();
+    screen.requestRender();
+    painted.push(frame);
+    return frame;
+  };
+  const driver = createUiDriver({
+    getSize: size,
+    readState: async () => await view.read(),
+    paint: async (state, { width, height }) => await paintFrame(),
+    pollMs: 700,
+    // The driver's onInput is synchronous, so the line is queued and awaited in the loop below:
+    // a submission is durable work and only the loop can await it in order.
+    onInput: (line) => { typed.push(line); },
+    onExit: () => {},
+  });
+  const flushTyped = async () => {
+    while (typed.length) {
+      const line = typed.shift();
+      const ack = await writerSubmit(parts, line, { context: parts.context });
+      // The acknowledgement goes to stderr so a scripted session reading stdout records stays parseable.
+      console.error(`submitted: requestId=${ack.requestId} submissionId=${ack.submissionId} status=${ack.status}`);
+    }
+  };
+  await paintFrame();
+  if (process.stdin.isTTY) process.stdin.setRawMode(true);
+  let quit = null;
+  while (true) {
+    const item = await reader.next();
+    if (item.done) break;
+    const answer = driver.noteData(item.value);
+    await flushTyped();
+    if (answer.quit) { quit = answer.quit; break; }
+    await driver.poll(Date.now());
+  }
+  await flushTyped();
+  if (quit) await driver.quit(quit);
+  screen.clear();
+  screen.requestRender();
+  screen.stop();
+  if (process.stdin.isTTY) process.stdin.setRawMode(false);
+  return { painted: painted.length, quit };
 }
 
 main().catch((err) => {

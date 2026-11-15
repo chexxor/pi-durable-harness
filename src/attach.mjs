@@ -63,9 +63,18 @@ export function serveOwner(parts, socketPath) {
 					continue;
 				}
 				try {
-					send(sock, { ok: true, command: msg.command, ...await handle(parts, msg) });
+					// src/rpc.mjs answers in pi's RPC shape ({command, success, data}); the attach transport's
+					// shape is the same answers flattened with an `ok` flag, so one handler speaks both and a
+					// reader never re-implements a verb. `run` and `settlements` are work the OWNER does, not
+					// bytes to a reader, so they are kept on the owner's parts instead of being serialised.
+					const answer = await handle(parts, msg, null);
+					parts.settlements = [...(parts.settlements ?? []), ...(answer.settlements ?? [])];
+					if (answer.run) parts.runs = [...(parts.runs ?? []), answer.run];
+					send(sock, answer.success
+						? { ok: true, command: answer.command, ...(answer.data ?? {}) }
+						: { ok: false, command: answer.command, error: answer.error, reason: answer.reason ?? null });
 				} catch (err) {
-					send(sock, { ok: false, command: msg.command, error: String(err?.message ?? err) });
+					send(sock, { ok: false, command: msg?.command ?? msg?.type ?? null, error: String(err?.message ?? err) });
 				}
 			}
 		});

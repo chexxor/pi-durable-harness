@@ -249,29 +249,67 @@ export function finalAnswerText(entries) {
  * that is not one of the commands is answered as a refusal, because a dead RPC server is a silent
  * client.
  * @temp: a line that is not parseable answers too, so one bad line cannot end the session. */
-export async function rpcLine(parts, line, context = BACKGROUND_CONTEXT) {
-	let msg;
-	try {
-	 msg = JSON.parse(line);
-	} catch (err) {
-	 return { ok: false, error: `invalid command: ${String(err?.message ?? err)}` };
-	}
-	// A submitted input is work this process should settle before it closes, so the next reopen finds
-	// an answer rather than a parked run.
-	// A submitted input is work this process should settle before it closes, so the next reopen finds
-	// an answer rather than a parked run; the handle is kept below, and `settleInvocation` waits on it.
-	if (msg?.command === "prompt") parts.settlements = [...(parts.settlements ?? [])];
-	// The offline plane again: `--faux` scripts the reply a demo RPC turn gets with no key and no
-	// network. A real run has none and a real provider answers instead.
-	// @temp: src/rpc.mjs owns every verb; this file only feeds it the shared parts.
-	if (parts.intent.faux && msg?.command === "prompt") scriptTurn(parts.faux, [parts.intent.faux]);
-	try {
-	 const answer = await handle(parts, msg);
-	 if (msg?.command === "prompt" && answer?.submissionId !== undefined) parts.settlements.push(answer.submissionId);
-	 return { ok: true, command: msg.command, ...answer };
-	} catch (err) {
-	 return { ok: false, command: msg.command, error: String(err?.message ?? err) };
-	}
+/** One RPC line in, pi's response record out, and (through `emit`) the run's session-event records.
+ *
+ * The record shape is pi's, spelled in docs/rpc.md and rpc-commands.md inside the pinned package:
+ * in is `{id?, type: <command>, ...params}`, out is `{id?, type: "response", command, success, data}`,
+ * where `id` only echoes an id the caller sent. The run a prompt started is kept on `parts.runs` so
+ * `settleInvocation` awaits it before the process closes - which is what makes an RPC client that
+ * sent a prompt and hung up still get pi-durable's answer on the same line, and what leaves the store
+ * with an answer rather than a parked run when the next process reopens it.
+ */
+export async function rpcLine(parts, line, emit = null) {
+ const requestedId = (() => {
+  try {
+   return JSON.parse(line)?.id ?? null;
+  } catch {
+   return null;
+  }
+ })();
+ let msg;
+ try {
+  msg = JSON.parse(line);
+ } catch (err) {
+  // A malformed line is answered in pi's own words for a failed response, not swallowed: the
+  // session keeps answering the commands that come after it.
+  return {
+   ...(requestedId ? { id: requestedId } : {}),
+   type: "response",
+   command: null,
+   success: false,
+   error: `invalid command: ${String(err?.message ?? err)}`,
+  };
+ }
+ const verb = msg?.type ?? msg?.command ?? null;
+ // The offline plane again: `--faux` scripts the reply a demo RPC turn gets with no key and no
+ // network. A real run has none and a real provider answers instead.
+ if (parts.intent.faux && verb === "prompt") scriptTurn(parts.faux, [parts.intent.faux]);
+ try {
+  const answer = await handle(parts, msg, emit);
+  // The queued input is recorded on the shared path's settlement list, so an answer exists
+  // before this process closes (the same rule print mode feeds).
+  parts.settlements = [...(parts.settlements ?? []), ...(answer.settlements ?? [])];
+  // The run it started (or joined) is awaited at close, which is pi's promise: a client may write
+  // a prompt and hang up straight away, and the process that queued it still reaches an answer.
+  if (answer.run) parts.runs = [...(parts.runs ?? []), answer.run];
+  return {
+   ...(requestedId ? { id: requestedId } : {}),
+   type: "response",
+   command: answer.command,
+   success: answer.success,
+   // pi's failed response record carries only `error` (docs/rpc-commands.md); adding a field
+   // pi does not declare would make a client's parser diverge, so the reason goes into the message.
+   ...(answer.success ? { data: answer.data } : { error: answer.error }),
+  };
+ } catch (err) {
+  return {
+   ...(requestedId ? { id: requestedId } : {}),
+   type: "response",
+   command: verb,
+   success: false,
+   error: String(err?.message ?? err),
+  };
+ }
 }
 
 /**
@@ -289,6 +327,17 @@ export async function settleInvocation(parts, context = BACKGROUND_CONTEXT) {
 		if (!submission) continue;
 		await submission.wait(context);
 	}
+ // The runs an RPC session started are awaited too: pi's client writes a command, reads the
+ // response, and may hang up straight away, so "the process that queued this input reached an
+ // answer before it closed" is the promise pi's own protocol makes, not a courtesy.
+ for (const run of parts.runs ?? []) {
+  try {
+   await run;
+  } catch {
+   // A failed stream already reported through pi's error channel (src/pievents.mjs emits
+   // `extension_error`); closing the session is not the place to rethrow it.
+  }
+ }
  await parts.harness.waitForIdle(context);
  return parts;
 }

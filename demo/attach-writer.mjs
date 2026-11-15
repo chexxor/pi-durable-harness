@@ -5,6 +5,10 @@ import { join } from "node:path";
 import { openHarness, prompt, scriptTurn } from "../src/core.mjs";
 import { claimWriter, releaseWriter, touchOwner } from "../src/ownership.mjs";
 import { serveOwner } from "../src/attach.mjs";
+// The owner settles what an attached reader queued, so the store is left with an answer and not
+// a parked run when the next process reopens it (src/cli-intent.mjs' settleInvocation, the ONE
+// settle path every surface shares).
+import { settleInvocation } from "../src/cli-intent.mjs";
 
 function arg(name, fallback = null) {
 	const i = process.argv.indexOf(`--${name}`);
@@ -30,16 +34,16 @@ try {
 	process.exit(1);
 }
 
-const h = await openHarness({ cwd, storePath: store });
-const server = serveOwner(h, claim.lock.socket);
+const parts = await openHarness({ cwd, storePath: store });
+const server = serveOwner(parts, claim.lock.socket);
 
-scriptTurn(h.faux, [
+scriptTurn(parts.faux, [
 	{ tool: "bash", args: { command: "echo owner-turn" } },
 	"the owner ran a turn",
 ]);
-await prompt(h.conversation, "hello from the owner", h.context);
+await prompt(parts.conversation, "hello from the owner", parts.context);
 
-console.log(JSON.stringify({ owned: true, pid: process.pid, socket: claim.lock.socket, conversation: h.conversation.id }));
+console.log(JSON.stringify({ owned: true, pid: process.pid, socket: claim.lock.socket, conversation: parts.conversation.id }));
 
 // Release on signal so the demo can prove the store becomes free after a clean exit.
 for (const signal of ["SIGINT", "SIGTERM"]) {
@@ -54,7 +58,11 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
 const heartbeat = setInterval(() => touchOwner(store), 1000);
 await new Promise((r) => setTimeout(r, holdMs));
 clearInterval(heartbeat);
+// Attached prompts are this process's work: it waits for pi-durable's answer before it closes, so
+// an attached reader that queued an input and left still finds the run it started settled.
+const settled = await settleInvocation(parts);
+console.log(JSON.stringify({ settled: { settlements: settled.settlements?.length ?? 0, runs: settled.runs?.length ?? 0 } }));
 server.close();
 releaseWriter(store);
 console.log(JSON.stringify({ released: true, pid: process.pid }));
-await h.harness.close(h.context);
+await parts.harness.close(parts.context);

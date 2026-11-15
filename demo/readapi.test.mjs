@@ -119,10 +119,13 @@ check("a second process reads the same committed line", childLine === `child-new
 //    pi-durable's own doc for readOnly says "the Harness stays usable for reads and watches" - so the feed being
 //    available here is pi-durable's rule, not a hole we chose not to plug.
 const viewerConversation = await viewer.harness.conversation(conversationId, BACKGROUND_CONTEXT);
-const firstWatch = await rpcHandle({ harness: viewer.harness, conversation: viewerConversation, context: BACKGROUND_CONTEXT }, { command: "watch", limit: 10 });
+const firstAnswer = await rpcHandle({ harness: viewer.harness, conversation: viewerConversation, context: BACKGROUND_CONTEXT }, { command: "watch", limit: 10 });
+// pi's response envelope is {command, success, data}; the payload is read off `data`.
+check("watch answers inside pi's response envelope", firstAnswer.success === true && firstAnswer.command === "watch", JSON.stringify({ c: firstAnswer.command, s: firstAnswer.success }).slice(0, 120));
+const firstWatch = firstAnswer.data;
 check("RPC watch answers rows and a resume boundary", Array.isArray(firstWatch.rows) && firstWatch.since !== undefined, JSON.stringify(firstWatch).slice(0, 140));
 check("resume boundary is pi-durable's own shape", typeof firstWatch.since?.from === "number", JSON.stringify(firstWatch.since));
-const secondWatch = await rpcHandle({ harness: viewer.harness, conversation: viewerConversation, context: BACKGROUND_CONTEXT }, { command: "watch", since: firstWatch.since, limit: 10 });
+const secondWatch = (await rpcHandle({ harness: viewer.harness, conversation: viewerConversation, context: BACKGROUND_CONTEXT }, { command: "watch", since: firstWatch.since, limit: 10 })).data;
 const firstIds = new Set(firstWatch.rows.map((row) => row.id));
 const repeated = secondWatch.rows.filter((row) => firstIds.has(row.id));
 check("re-issuing watch with the boundary delivers nothing twice", repeated.length === 0, `${repeated.length} repeats of ids ${[...firstIds].join(",")}`);

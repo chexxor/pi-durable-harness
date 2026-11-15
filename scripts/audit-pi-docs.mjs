@@ -10,7 +10,22 @@
 //
 // WHY THE HARVEST IS GROUNDED, AND WHY THE SCOPE IS WHAT IT IS: a capability list typed into this file is
 // the same kind of claim as the matrix, and it goes stale the first time pi's docs grow - so the audit reads
-// pi's docs here. But "capability" has to mean something, and the two wrong meanings are visible in pi's docs:
+// pi's docs here, and it reads every pi doc that enumerates a surface this harness claims to re-use: the
+// extension API and packages (extensions.md, packages.md), the CLI (cli.md), the sessions and their entry
+// kinds (sessions.md, session-format.md), compaction (compaction.md), and the modes this harness rebuilds
+// - pi's RPC verbs (rpc.md AND rpc-commands.md, whose 34 `###` headings are pi's own command list), the
+// JSON event stream (json.md), pi-ai's message types (message-types.md), the TUI (tui.md) and extension
+// dialogs (rpc-extension-ui.md). But "capability" has to mean something, and the two wrong meanings are
+// visible in pi's docs: (a) "every identifier a doc mentions" turns example names (`my_tool`, `lookup_weather`)
+// and internal component types into requirements, and (b) a scope chosen to fit the matrix is unfalsifiable.
+// So a capability here passes TWO gates: it sits in a part of a doc that ENUMERATES the surface pi offers
+// (a heading pi writes as a name, an event/record name in an events section, a manifest kind, a documented
+// CLI flag, an entry kind compaction writes), and pi's own pinned dist ships the name (a quoted literal, an
+// exported name, or a member/method/object-key in the dist sources) - except documented verbs and flags,
+// which are verbs rather than symbols, so their shape is the gate. Payload FIELDS inside a documented record
+// (`disposition`, `leafId`, `exitCode`) are deliberately not capabilities: they are parts of a record, and
+// the record's verb is the capability - which is why the `prompt` row has to cover them and a field name
+// cannot silently become a row of its own.
 // (a) "every identifier a doc mentions" turns example names (`my_tool`, `lookup_weather`) and internal types
 // into requirements, and (b) a scope chosen to fit the matrix is unfalsifiable. So a capability here passes
 // TWO gates: it sits in a part of a doc that ENUMERATES the surface pi offers an extension (pi's "Available
@@ -26,7 +41,8 @@ import { readdirSync, readFileSync, globSync } from "node:fs";
 import { join } from "node:path";
 
 const PI_PKG = join("@earendil-works", "pi-coding-agent");
-const DOCS = ["packages.md", "extensions.md", "rpc.md", "cli.md", "sessions.md", "compaction.md"];
+const DOCS = ["packages.md", "extensions.md", "rpc.md", "rpc-commands.md", "json.md", "message-types.md", "tui.md",
+	"rpc-extension-ui.md", "session-format.md", "cli.md", "sessions.md", "compaction.md"];
 // pi's extension docs import across four packages, so the grounding vocabulary does too: a name pi's pinned
 // release ships anywhere in these packages is a real API, and a name it ships nowhere is prose or an example.
 const DIST_PKGS = ["pi-coding-agent", "pi-ai", "pi-tui", "chord"];
@@ -35,7 +51,7 @@ const DIST_PKGS = ["pi-coding-agent", "pi-ai", "pi-tui", "chord"];
 function exportedNames() {
  const names = new Set();
  for (const pkg of DIST_PKGS) {
-  const index = join("node_modules", pkg, "dist", "index.d.ts");
+  const index = join("node_modules", "@earendil-works", pkg, "dist", "index.d.ts");
   let text;
   try { text = readFileSync(index, "utf8"); } catch { continue; }
   for (const line of text.split("\n")) {
@@ -201,6 +217,44 @@ for (const token of docTokens("compaction.md")) {
  if (/^(enabled|reserveTokens|keepRecentTokens|backgroundTokens|modelOverrides|branchSummary|maxRetries|baseDelayMs|maxAgentDelayMs|keepRecent)$/.test(token)) push("compaction.md", token, "a compaction/summarization settings key");
 }
 
+// ---- the modes and formats this harness claims, harvested the same way ----
+// pi's RPC reference (rpc.md) states the protocol; rpc-commands.md ENUMERATES the verbs, so its
+// `### prompt`-style headings are capabilities, not prose. json.md's event records, message-types.md's
+// message types, tui.md's components and rpc-extension-ui.md's dialogs are named the same way: a heading
+// that IS a name, a snake_case record/event name, a PascalCase type pi exports, or a documented flag.
+for (const doc of ["rpc-commands.md", "json.md", "message-types.md", "tui.md", "rpc-extension-ui.md", "session-format.md"]) {
+	const text = readFileSync(join("node_modules", PI_PKG, "docs", doc), "utf8");
+	for (const line of text.split("\n")) {
+		if (!/^#{1,6} /.test(line)) continue;
+		const title = line.replace(/^#{1,6} /, "").trim();
+		// `### prompt` - the heading IS the verb; `### get_state` likewise.
+		if (/^[a-z][a-z0-9_]*$/.test(title)) {
+			push(doc, title, `a verb pi enumerates as a heading in its ${doc}`, true, true);
+			continue;
+		}
+		// `### TextContent` - a type pi NAMES as a heading. A single capitalised word is prose in these
+		// docs (`## Bash`, `## Retry`, `## Input`), so the gate is that pi's pinned dist DECLARES or EXPORTS
+		// the name: prose words are not capabilities.
+		if (/^[A-Z][A-Za-z0-9]*$/.test(title) && (DECLARED.has(title) || NAMES.has(title))) {
+			push(doc, title, `a type pi names as a heading in its ${doc}`);
+			continue;
+		}
+		// `### The `prompt` record` - the name is inside the heading.
+		for (const token of [...title.matchAll(/`([^`]+)`/g)].map((match) => match[1])) {
+			if (/^[a-z][a-z0-9_]*$/.test(token)) push(doc, token, `a verb pi spells in a heading of its ${doc}`, true, true);
+			if (/^[A-Z][A-Za-z0-9]*$/.test(token) && token.length > 4 && (DECLARED.has(token) || NAMES.has(token))) push(doc, token, `a type pi spells in a heading of its ${doc}`);
+		}
+	}
+	for (const token of docTokens(doc)) {
+		// pi's event and record names are snake_case and its dist quotes them.
+		if (/^[a-z][a-z0-9_]*(_[a-z0-9]+)+$/.test(token)) push(doc, token, `an event/record name pi's ${doc} spells`);
+		// Only types pi's dist DECLARES or EXPORTS count: `Markdown`/`Image`/`Input` are capabilities ONLY
+		// because pi-tui really ships those components, while `Retry`/`Bash`/`Messages` are prose headings.
+		if (/^[A-Z][A-Za-z0-9]*$/.test(token) && token.length > 4 && (DECLARED.has(token) || NAMES.has(token))) push(doc, token, `a type pi's ${doc} names`);
+	}
+	for (const token of docFlags(doc)) push(doc, token, `a flag pi's ${doc} documents`, true, true);
+}
+
 // ---- what the harness actually claims ----
 function matrixText() {
  return readFileSync(join(process.cwd(), "src", "packages", "matrix.mjs"), "utf8");
@@ -339,4 +393,4 @@ if (uncovered.length) {
  for (const row of uncovered) console.log(`  ${row.doc} :: ${row.capability} :: ${row.gate}`);
  process.exit(1);
 }
-console.log(`PI-DOC AUDIT PASS: ${rows.length} capabilities enumerated by pi's six docs are each named by a matrix row (${matrix.split("\n").filter((line) => /status:/.test(line)).length} rows) or called by harness source`);
+console.log(`PI-DOC AUDIT PASS: ${rows.length} capabilities enumerated by pi's ${DOCS.length} docs are each named by a matrix row (${matrix.split("\n").filter((line) => /status:/.test(line)).length} rows) or called by harness source`);

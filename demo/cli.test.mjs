@@ -103,16 +103,17 @@ async function main() {
  const parsed = jsonLines.filter(Boolean);
  record(jsonRun.exit === 0 && parsed.length === jsonLines.length,
   "json mode emits one parseable record per line", `${parsed.length} of ${jsonLines.length} lines parsed (exit ${jsonRun.exit})`);
- record(parsed.every((e) => e.type === "entry" && e.kind && e.id !== undefined),
-  "json mode's records are pi-durable's committed entries (kind + EntryId)",
-  `kinds=${parsed.map((e) => e.kind).join(",")}`);
- record(parsed.some((e) => e.kind === "pi.assistant" && e.model),
-  "json mode carries the assistant message the provider answered with",
-  `ids=${parsed.filter((e) => e.kind === "pi.assistant").map((e) => e.id).join(",")}`);
- const resumedConversation = parsed.filter((e) => e.kind === "pi.user").map((e) => e.id);
- record(resumedConversation.length >= 2,
+ record(parsed[0]?.type === "session" && parsed.every((e) => e.type !== undefined),
+  "json mode emits pi's JSON records: a session header then event records (docs/json.md)",
+  `types=${[...new Set(parsed.map((e) => e.type))].join(",")}`);
+ const assistantEnds = parsed.filter((e) => e.type === "message_end" && e.message?.role === "assistant");
+ record(assistantEnds.length >= 1 && assistantEnds.every((e) => Array.isArray(e.message?.content) && e.message.content.length > 0),
+  "json mode carries the assistant message the provider answered with (pi's message_end record)",
+  `assistant content blocks=${assistantEnds.map((e) => e.message.content.length).join(",")}`);
+ const userEnds = parsed.filter((e) => e.type === "message_end" && e.message?.role === "user");
+ record(userEnds.length >= 2,
   "json mode on a reopened store shows BOTH the first run's input and this run's",
-  `pi.user ids=${resumedConversation.join(",")}`);
+  `pi user message_end records=${userEnds.length}`);
 
  // 3) RPC mode: a JSONL command sequence in, one answer per command out, over the shared rpc handler.
  const rpcRun = await runScript(CLI, ["--store", store, "--cwd", cwd, "--faux", fauxReply, "--mode", "rpc"], {
@@ -122,35 +123,50 @@ async function main() {
    + JSON.stringify({ command: "read", limit: 30 }) + "\n"
    + JSON.stringify({ command: "notacommand" }) + "\n",
  });
- const rpcAnswers = rpcRun.stdout.split("\n").filter((l) => l.trim()).map((l) => { try { return JSON.parse(l); } catch { return null; } });
- const ready = rpcAnswers[0];
- const answers = rpcAnswers.slice(1);
- record(rpcRun.exit === 0 && ready?.ok === true && ready.command === "ready",
+ const rpcRecords = rpcRun.stdout.split("\n").filter((l) => l.trim()).map((l) => { try { return JSON.parse(l); } catch { return null; } });
+ const ready = rpcRecords[0];
+ const rest = rpcRecords.slice(1);
+ // pi's protocol: a command answers {type:"response", command, success, data}; the run's events
+ // (docs/json.md) stream beside those responses.
+ const responses = rest.filter((r) => r.type === "response");
+ const events = rest.filter((r) => r.type !== "response");
+ record(rpcRun.exit === 0 && ready?.type === "ready" && ready.conversationId !== undefined && Array.isArray(ready.commands) && ready.commands.length > 0,
   "rpc mode announces itself once, with the command set", `ready commands=${(ready?.commands ?? []).join(",")}`);
- record(answers.length === 5,
-  "rpc answers every command line, including a bad one", `5 commands sent (status, two prompts, read, one non-command) -> answers=${answers.length}, exit=${rpcRun.exit}`);
- record(answers[0]?.command === "status" && answers[0]?.ok, "status answers with the store's state",
-  `newestEntry=${answers[0]?.newestEntry} conversation=${answers[0]?.conversation}`);
- const prompts = answers.filter((a) => a.command === "prompt");
- record(prompts.length === 2 && prompts.every((p) => p.ok),
+ record(responses.length === 5,
+  "rpc answers every command line, including a bad one", `5 commands sent (status, two prompts, read, one non-command) -> responses=${responses.length}, events=${events.length}, exit=${rpcRun.exit}`);
+ record(responses.every((r) => r.type === "response" && typeof r.success === "boolean" && r.command && (r.success ? r.data !== undefined : typeof r.error === "string")),
+  "every answer is a pi response record (type, command, success, data or error)",
+  `responses=${responses.length} commands=${responses.map((r) => r.command).join(",")}`);
+ const statusAnswer = responses[0];
+ record(statusAnswer.command === "status" && statusAnswer.success && statusAnswer.data?.newestEntry !== undefined,
+  "status answers with the store's state",
+  `newestEntry=${statusAnswer.data?.newestEntry} conversation=${statusAnswer.data?.conversation}`);
+ const prompts = responses.filter((a) => a.command === "prompt");
+ record(prompts.length === 2 && prompts.every((p) => p.success && p.data?.requestId && p.data?.submissionId !== undefined),
   "rpc queues both prompt commands onto the ONE mutation line",
-  `submissionIds=${prompts.map((p) => p.submissionId).join(",")} requestIds=${prompts.map((p) => p.requestId).join(",")}`);
- record(new Set(prompts.map((p) => p.requestId)).size === 1,
+  `submissionIds=${prompts.map((p) => p.data?.submissionId).join(",")} requestIds=${prompts.map((p) => p.data?.requestId).join(",")}`);
+ record(new Set(prompts.map((p) => p.data?.submissionId)).size === 1,
   "the repeated requestId names ONE queued input (requestId is pi-durable's exactly-once admission key)",
-  `requestIds=${[...new Set(prompts.map((p) => p.requestId))].join(",")}`);
- const readAnswer = answers.find((a) => a.command === "read");
- record(readAnswer?.ok && Array.isArray(readAnswer?.items),
-  "rpc read answers with committed entries, not a reconstruction", `items=${(readAnswer?.items ?? []).length}`);
- const bad = answers.find((a) => a.command === "notacommand");
- record(bad?.ok === false && String(bad?.error ?? "").includes("notacommand"),
+  `submissionIds=${[...new Set(prompts.map((p) => p.data?.submissionId))].join(",")} requestIds=${[...new Set(prompts.map((p) => p.data?.requestId))].join(",")}`);
+ const readAnswer = responses.find((a) => a.command === "read");
+ record(readAnswer?.success && Array.isArray(readAnswer?.data?.items),
+  "rpc read answers with committed entries, not a reconstruction", `items=${(readAnswer?.data?.items ?? []).length}`);
+ const bad = responses.find((a) => a.command === "notacommand");
+ record(bad?.success === false && String(bad?.error ?? "").includes("notacommand"),
   "an unknown command is a refusal, not a silent stall", JSON.stringify(bad?.error ?? bad));
- const readIds = (readAnswer?.items ?? []).map((item) => item.id);
+ const readIds = (readAnswer?.data?.items ?? []).map((item) => item.id);
  record(readIds.length > 0 && readIds.every((id) => typeof id === "number"),
   "rpc read rows carry pi-durable EntryIds", `ids=${readIds.join(",")}`);
- const userEntries = (readAnswer?.items ?? []).filter((item) => item.kind === "pi.user");
+ const userEntries = (readAnswer?.data?.items ?? []).filter((item) => item.kind === "pi.user");
  record(userEntries.length >= 3,
   "the store's line carries print, json and rpc inputs side by side",
   `pi.user ids=${userEntries.map((e) => e.id).join(",")}`);
+ record(events.length > 0 && events.some((e) => e.type === "agent_start") && events.some((e) => e.type === "message_end" && e.message?.role === "assistant") && events.some((e) => e.type === "agent_settled"),
+  "rpc streams pi's session-event records for the run (docs/json.md), from committed entries only",
+  `events=${events.length} types=${[...new Set(events.map((e) => e.type))].join(",")}`);
+ record(!events.some((e) => ["text_delta", "thinking_delta", "toolcall_delta"].includes(e.type)),
+  "no invented streaming-delta records are claimed",
+  `delta records=${events.filter((e) => ["text_delta", "thinking_delta", "toolcall_delta"].includes(e.type)).length}`);
  record(!rpcRun.stderr.includes("Session is closed"),
   "rpc settled the queued prompts before closing", `stderr=${JSON.stringify(rpcRun.stderr.trim().slice(0, 80))}`);
 
@@ -166,7 +182,9 @@ async function main() {
  record(reopened.reopened === true && reopened.intent.verb === "continue",
   "the continue verb resolves to a reopen of the SAME conversation, not a new line",
   `conversation=${reopened.conversation.id} priorLines=${reopened.priorLines.join(",")}`);
- record(reopened.commands.length === 7, "the shared path carries the rpc command set to every surface",
+ const { commandNames } = await import("../src/rpc.mjs");
+ record(reopened.commands.join(",") === commandNames().join(",") && commandNames().includes("get_state") && commandNames().includes("bash"),
+  "the shared path carries the rpc command set to every surface",
   `commands=${reopened.commands.join(",")}`);
  await reopened.harness.close(reopened.context);
 
