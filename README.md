@@ -1,88 +1,136 @@
 # pi-durable-harness
 
 A single-agent coding harness built on `@earendil-works/pi-durable`, reusing the pi package
-ecosystem (extensions, skills, prompt templates, themes, context files) and pi's CLI surface.
+ecosystem (extensions, skills, prompt templates, themes, context files) and pi's CLI surface
+(print / JSON / RPC / TUI).
 
 It is extracted from the harness-generic parts of `~/Git/Durian-Pi`. Durian-Pi's multi-seat
 orchestration (seats, the cross-seat work queue, broker/serve, genlock, per-item worktrees,
-metrics, constitution, selfdev) is **dropped**, not reimplemented. Every extracted file carries a
-provenance header naming its Durian-Pi source, what changed, and why.
-
-## What is the backend
-
-One durable Session over one storage opener:
-
-```
-openNodeSqliteStorage(path)  ->  Harness.open(storage, {models, registry, env}, context)
-```
-
-The durable Session atomically commits immutable entries, full task records and Chord-tracked
-documents; only committed state is observable, and a commit marked deferred may be observed before
-it is stored (pi-durable spec). This harness never runs its own SQL and never reimplements state
-the harness already owns.
+metrics, constitution, selfdev) is **dropped**, not reimplemented — `scripts/audit-orchestration.mjs`
+checks that no code-level dependency on those concepts survives. Every extracted file carries a
+provenance header naming its source, what changed, and why; `scripts/audit-provenance.mjs` checks
+that claim mechanically (see [docs/provenance.md](docs/provenance.md)).
 
 ## Quick start
 
 ```bash
 npm install
-node scripts/sync-pi.mjs --report     # PIN | DECLARED | RESOLVED, drift on every run
-node scripts/suite.mjs                # every offline demo, one provenance line, pass/fail tally
-node cli.mjs -p "hello"               # print mode          } these three are the CLI surfaces task-7
-node cli.mjs --mode json -p "hello"   # NDJSON agent events } proves with demo/cli.test.mjs; until that demo
-node cli.mjs --mode rpc               # JSONL commands      } is in the tree, the modes below are written and
-node cli.mjs                          # interactive TUI     } syntax-checked, not yet exercised offline
+node scripts/sync-pi.mjs --report     # PIN | DECLARED | RESOLVED, drift reported on every run
+node scripts/suite.mjs                # every offline demo + both audits, one tally (no keys, no network)
 ```
 
-The store lives in the current directory (`harness.sqlite` by default). Run the harness twice in
-the same directory: the second invocation attaches to the first session as a reader instead of
-opening a second mutation line - see [docs/attach.md](docs/attach.md).
+Then the four CLI surfaces, each proved by `demo/cli.test.mjs` and `demo/tui.test.mjs`:
+
+```bash
+node cli.mjs -p "hello"                    # print mode: stdout is the final answer text only
+node cli.mjs --mode json -p "hello"        # NDJSON: pi-durable's own entries, one per line
+node cli.mjs --mode rpc                    # JSONL commands on stdin (status config read prompt watch abort compact)
+node demo/tui-interactive.mjs --store harness.sqlite   # the pi-tui viewer over a store
+```
+
+All four open the SAME harness-invocation path (`src/cli-intent.mjs`), so the difference between them
+is what is printed, not what is run. `node cli.mjs --store <path>` names the store;
+`--conversation <id>` picks a conversation the last run printed.
+
+### Attach behavior (one writer, many readers)
+
+```bash
+node cli.mjs --store work/h.sqlite -p "first"      # claims the store; prints the owner lock
+node cli.mjs --store work/h.sqlite -p "second"     # re-attaches as a reader of the SAME line
+node demo/attach-writer.mjs --store work/h.sqlite --cwd work      # a writer serving a socket for readers
+node demo/attach-reader.mjs --store work/h.sqlite --cwd work      # reads/watches/prompt-queues via that socket
+```
+
+The rules, and where each is proved (`demo/attach.test.mjs`, 14 checks;
+[docs/attach.md](docs/attach.md)):
+
+- one writer owns the store's single mutation line (`src/ownership.mjs`: `claimWriter`);
+- a second writer fails LOUDLY, naming the holder's `pid`, the `startedAt` time and the store path;
+- attached readers read committed state and never open a second mutation line;
+- queued writes land on that line **exactly once**, keyed by `requestId` (pi-durable's own
+  `SubmissionDraft.requestId` admission), so a client may retry without duplicating input;
+- a clean exit releases the lock; `SIGKILL` does not, so liveness is `process.kill(pid, 0)` and a
+  stale lock is reclaimed, making the store reusable;
+- the socket is transport only — pi-durable remains the only source of truth.
 
 ## Pin discipline
 
-`pi-main.pin.json` pins a TAG (v1.5.1), never `main`. `scripts/sync-pi.mjs` reports drift on every
+`pi-main.pin.json` pins a TAG (`v1.5.1`), never `main`. `scripts/sync-pi.mjs` reports drift on every
 invocation, refuses refs upstream does not have, and prints the three planes (pin / declared /
 resolved). Verified symbols come from the pinned dist `.d.ts` files, not from assumptions.
+
+Current state on this machine: `PIN tag "v1.5.1"`, `DECLARED 10 packages, all resolving 1.5.1`,
+`RESOLVED all 10 pinned packages`, `via=lockfile-released`, no `LOUD FALLBACK` line, and upstream
+drift reported as one published tag (`v1.5.2`) behind the pin.
 
 ## Reading a session
 
 `src/readapi.mjs` is the one read-only surface: `openStore` (pi-durable's opener + a `readOnly`
-Harness), `readEntries`, `listConversations`, `usage`. `src/eventfeed.mjs` adds the feed -
-committed rows plus the in-flight partial - and `src/viewmodel.mjs` decides how each becomes a line.
+Harness), `readEntries`, `listConversations`, `usage`. `src/eventfeed.mjs` adds the feed — committed
+rows plus the in-flight partial — and `src/viewmodel.mjs` decides how each becomes a line.
 
-Two of these choices are load-bearing, and the demos exist to keep them honest:
+Two choices are load-bearing, and the demos exist to keep them honest (`demo/readapi.test.mjs`, 20 checks):
 
 - **A partial is a row, never an entry.** pi-durable's progress commits are deferred ("the Session
   adopts it in memory, shows it to watches and views, and resolves, but stores it later"), so an
   in-flight partial may never be stored, and a crash loses it. A viewer that counted it as an entry
-  would report a turn that may not exist. See `demo/readapi.test.mjs`.
+  would report a turn that may not exist.
 - **`--since` is pi-durable's boundary, not an offset.** `ConversationWindow.from` says where a scan
   starts, and `ConversationTranscript.resume` says what continues it; pi-durable's own doc for that
-  layer says "Nothing counts entries or computes ranges from entry IDs, which have holes" - entry
+  layer says "Nothing counts entries or computes ranges from entry IDs, which have holes" — entry
   IDs have holes, so an offset of ours would be wrong at the first gap.
 
 A read-only Harness can watch ("the Harness stays usable for reads and watches", pi-durable's own
-words), which is why `watch` is one of the RPC commands and why a viewer never needs a second
-mutation line: see [docs/attach.md](docs/attach.md) for the ownership rules and the measured
-failure of the read-only file open.
+words), which is why `watch` is one RPC command and why a viewer never needs a second mutation line.
+Opening the sqlite file itself read-only does not work: measured
+`openNodeSqliteStorage(path, { mode: "read-only" })` → `"attempt to write a readonly database"`
+because the opener applies migrations on open — see [docs/attach.md](docs/attach.md).
+
+## Settings, models, spend
+
+`src/settings.mjs` resolves pi's `settings.json` (global + project scopes) through pi's own
+`SettingsManager` into pi-durable's named settings and agent config; the defaults are pi-durable's
+own exported constants (`DEFAULT_RETRY_POLICY`, `DEFAULT_COMPACTION_POLICY`, `DEFAULT_PROGRESS_POLICY`,
+`DEFAULT_RESTART_LIMIT`), and what pi names and pi-durable does not is returned as **rows**, not folded
+away. `demo/settings.test.mjs` (27 checks) also reads the policy back out of pi-durable's own durable
+state (`conversation.agent()`), so "compaction off" survives a reopen instead of being a per-process flag.
+
+`src/providers.mjs` builds pi's model plane (`ModelRuntime`/`ModelRegistry`) and resolves model refs by
+the prefix rule it extracted from Durian-Pi's `seatmodel.mjs`; `src/spend.mjs` keeps a JSONL money
+ledger separate from pi-durable's usage plane, and classifies endpoints (loopback free, LAN not free).
 
 ## pi-durable vs pi
 
-The pi package ecosystem is reused through pi's own library exports, and every capability pi has
-that pi-durable does not is named rather than quietly dropped: [docs/package-support.md](docs/package-support.md)
-is generated from `src/packages/matrix.mjs` by `scripts/render-matrix.mjs` (native / shimmed /
-unsupported, one row per capability, evidence per row).
+The pi package ecosystem is reused through pi's own library exports, and every capability pi has that
+pi-durable does not is **named** rather than quietly dropped: [docs/package-support.md](docs/package-support.md)
+is generated from `src/packages/matrix.mjs` by `scripts/render-matrix.mjs` — 40 rows
+(8 native / 12 shimmed / 20 unsupported), evidence per row, plus the packages actually installed on
+this machine and what loaded from them. `src/packages/loader.mjs` uses pi's `DefaultResourceLoader`,
+`discoverAndLoadExtensions` and `loadProjectContextFiles`; `src/packages/adapter.mjs` maps pi's
+`registerTool`, `tool_call`/`tool_result`/provider/compaction handlers, skills, prompts, themes and
+context files onto pi-durable's `defineExtension`/`defineTool`/`hook`/`section`.
+`demo/packages.test.mjs` (35 checks) proves the shim runs end to end on a fixture package and on the
+four real pi packages installed here.
 
 ## Layout
 
 | Path | What it is |
 |---|---|
-| `src/core.mjs` | spine: storage -> registry -> tools -> env -> Harness.open -> root conversation |
-| `src/providers.mjs`, `src/spend.mjs` | model registry + usage/price accounting |
-| `src/toolsurface.mjs`, `src/executionenv.mjs` | tool guardrails and the execution environment |
+| `src/core.mjs` | spine: storage → registry → tools → env → `Harness.open` → root conversation |
+| `src/cli-intent.mjs`, `cli.mjs`, `src/rpc.mjs` | one intent shape, one harness-invocation path: print / json / rpc |
+| `src/ownership.mjs`, `src/attach.mjs` | store ownership (one writer) and the multiplexer attach path |
 | `src/readapi.mjs`, `src/eventfeed.mjs`, `src/viewmodel.mjs` | the single read-only read API + event feed |
-| `src/tui/` | pi-tui transcript view and input (pending: task-6 not landed yet; no code here claims it) |
-| `cli.mjs`, `src/rpc.mjs` | print / json / rpc surfaces |
-| `src/packages/` | pi package discovery + the extension compatibility shim |
-| `src/ownership.mjs`, `src/attach.mjs` | store ownership and the multiplexer attach path |
-| `demo/` | the offline demo suite (no keys, no network) |
-| `docs/` | capability matrix, attach semantics, provenance notes |
+| `src/tui/` | pi-tui view: rows, sync/watch planes, frame + paint, input overlay, headless driver |
+| `src/settings.mjs`, `src/providers.mjs`, `src/spend.mjs` | settings/policy resolution, model plane, money ledger |
+| `src/toolsurface.mjs`, `src/executionenv.mjs` | tool guardrails, custom tools, and the execution environment |
+| `src/packages/` | pi package discovery, pi's own loader, the extension shim, the capability matrix |
+| `demo/` | the offline demo suite (no keys, no network); `*-interactive`/`*-writer`/`*-reader` are fixtures |
+| `scripts/` | `suite.mjs` (demos + audits), `sync-pi.mjs`, `render-matrix.mjs`, the two audits |
+| `docs/` | capability matrix, attach semantics, provenance table |
+
+## Provenance
+
+`docs/provenance.md` is generated by `scripts/audit-provenance.mjs --markdown` and lists every source
+file with its provenance line, whether that line names the pinned symbols it was read against, and
+whether it says what was dropped. Files with no original say `no Durian-Pi original` — "we wrote this
+ourselves" is itself a claim, so it gets a header too.
