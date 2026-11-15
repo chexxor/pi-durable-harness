@@ -1,3 +1,5 @@
+// PROVENANCE: no Durian-Pi original - the capability matrix this renders has no counterpart in Durian-Pi, which
+// never loaded pi's package plane outside a seat; the file is named as such so a reader knows it is ours.
 // scripts/render-matrix.mjs - docs/package-support.md is GENERATED from src/packages/matrix.mjs, never
 // kept beside it: two places that name the same capability drift silently the first time one of them is
 // edited, and a reader cannot tell which half is true. Run:

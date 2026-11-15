@@ -1,3 +1,5 @@
+// PROVENANCE: no Durian-Pi original - this checks the user's dropped-concept list against THIS repo's code; the
+// concepts it names are Durian-Pi's, and this file is what turns "we dropped them" into a falsifiable claim.
 // scripts/audit-orchestration.mjs - the "no dependency on the dropped orchestration layer" check, as a
 // command rather than a remembered grep.
 //
