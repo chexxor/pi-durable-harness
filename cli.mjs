@@ -12,10 +12,13 @@ import { join } from "node:path";
 import { claimWriter, releaseWriter, readOwner } from "./src/ownership.mjs";
 import { serveOwner, request } from "./src/attach.mjs";
 import { handle, commandNames } from "./src/rpc.mjs";
-import { openHarness, scriptTurn, transcript } from "./src/core.mjs";
+import { scriptTurn, transcript } from "./src/core.mjs";
+import { harnessInvocation, intent, agentEvent, finalAnswerText, rpcLine, settleInvocation } from "./src/cli-intent.mjs";
+import { readFeed } from "./src/eventfeed.mjs";
 
 const HELP = `pi-durable-harness [options] [--] [prompt words...]
-  --store <path>          durable store (default ./harness.sqlite)
+  --cwd <dir>             work in <dir> (default: the directory this ran in)
+  --store <path>          durable store (default <cwd>/harness.sqlite)
   --mode <text|json|rpc>  output mode (default text)
   -p, --print             run the prompt and exit
   -c, --continue          continue this directory's root conversation
@@ -42,6 +45,8 @@ export function parseArgs(argv) {
     else if (t === "-p" || t === "--print") a.print = true;
     else if (t === "-c" || t === "--continue" || t === "-r" || t === "--resume") a.continue = true;
     else if (t === "--no-session") a.noSession = true;
+    else if (t === "--hold") { a.hold = Number(argv[i + 1]); i++; }
+    else if (t === "--faux") { a.faux = argv[i + 1]; i++; }
     else if (t === "--no-tools") a.noTools = true;
     else if (t === "--attach") a.attach = true;
     else if (t.startsWith("--")) {
@@ -50,6 +55,8 @@ export function parseArgs(argv) {
       // An unknown flag fails loudly instead of guessing: a silently dropped flag is how a user ends
       // up writing into the wrong store.
       if (name === "store") { a.store = value; i++; }
+      else if (name === "cwd") { a.cwd = value; i++; }
+      else if (name === "session") { a.conversation = value; i++; }
       else if (name === "mode") { a.mode = value; i++; }
       else if (name === "conversation") { a.conversation = value; i++; }
       else if (name === "model") { a.model = value; i++; }
@@ -89,7 +96,8 @@ async function attachAsReader(owner) {
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) { console.log(HELP); return; }
-  const store = args.store ?? join(process.cwd(), "harness.sqlite");
+  const cwd = args.cwd ?? process.cwd();
+  const store = args.store ?? join(cwd, "harness.sqlite");
 
   const owned = readOwner(store);
   if (owned.owned && !args.noSession) {
@@ -114,92 +122,57 @@ async function main() {
   }
   if (args.attach) throw new Error(`--attach needs a live owner; ${owned.reason ?? "the store is not claimed"}`);
 
-  // Claim before opening: the process that opens the store is the process that owns the mutation
-  // line, so a second invocation cannot double-own it.
-  // --tools / --exclude-tools are enforced by a beforeTool hook, not by hiding the tool: the refusal
-  // --tools / --exclude-tools choose the OFFERED toolset: pi-durable settles a call to a tool the
-  // request did not offer as `tool_unavailable` (node_modules/@earendil-works/pi-durable/dist/harness/
-  // tool.d.ts: "A call to a tool its request did not offer: settles `tool_unavailable`"), so the
-  // refusal is a committed tool result the model can see, not a guess we make here.
-  // @temp: the deny list wins over the allow list, so a typo in an allowed list can never re-open
-  // @temp: a tool the caller meant to close.
-  const denied = new Set(args.excludeTools ?? []);
-  const allowed = args.tools ? args.tools.filter((n) => !denied.has(n)) : null;
+  // Claim before opening: the process that opens the store is the process that owns the mutation line.
   const claim = args.noSession ? null : claimWriter(store);
-  const parts = await openHarness({
-    cwd: process.cwd(),
-    storePath: args.noSession ? null : store,
-    tools: !args.noTools,
-    ...(allowed ? { toolNames: allowed } : {}),
-    ...(denied.size ? { excludeTools: [...denied] } : {}),
-    agent: {
-      model: args.model ? { provider: args.provider ?? "faux", modelId: args.model } : { provider: "faux", modelId: "faux-1" },
-      ...(args.systemPrompt ? { instructions: args.systemPrompt } : {}),
-    },
-  });
-  // --conversation opens a specific conversation of the same store instead of the root one: pi-durable
-  // keeps conversations by id, which is what `--session <id>` means here.
-  if (args.conversation) {
-    const opened = await parts.harness.conversation(Number(args.conversation), parts.context);
-    if (!opened) throw new Error(`no conversation ${args.conversation} in this store; the ids are what a previous run printed`);
-    parts.conversation = opened;
-  }
 
-  // The owner serves its socket for the whole run, so a second invocation in this directory attaches
-  // as a reader to the same session instead of opening the store a second time.
+  // The ONE shared path: flags -> intent -> one harnessInvocation -> the surface below only prints.
+  // pi-durable's recovery is inside that path (resume() when the store already has a committed line),
+  // which is why print, json, rpc, `-c`/`-r`, and `--session <id>` cannot open differently.
+  const flags = {
+    ...args,
+    cwd,
+    // --no-tools chooses an EMPTY offered set; pi-durable then settles any call as `tool_unavailable`,
+    // which is pi's --no-tools behaviour with pi-durable's refusal instead of a hidden tool.
+    ...(args.noTools ? { tools: [] } : {}),
+    // pi's --append-system-prompt extends the base instructions rather than replacing them.
+    ...(args?.systemPrompt && args?.appendSystem?.length ? { systemPrompt: [...(args.systemPrompt ? [args.systemPrompt] : []), ...args.appendSystem].join("\n\n") } : {}),
+  };
+  const parts = await harnessInvocation(flags, { extraExtensions: [] });
   const server = claim ? serveOwner(parts, claim.lock.socket) : null;
-  const out = args.mode ?? "text";
+  const mode = parts.intent.mode;
   try {
-    if (out === "json") {
-      // NDJSON of committed entries as they arrive, from the durable watch - not our reconstruction.
-      const watch = await parts.conversation.watch(parts.context, { min: 1, max: 200 });
-      const seen = new Set();
-      const print = (entry) => {
-        if (!entry || seen.has(entry.id)) return;
-        seen.add(entry.id);
-        console.log(JSON.stringify({ type: "entry", kind: entry.kind, id: entry.id, model: entry.model }));
-      };
-      for (const e of (await transcript(parts.conversation, parts.context, 100)).reverse()) print(e);
-      watch.start(async (call) => {
-        if (call?.kind !== "value") return;
-        for (const e of call.value?.entries ?? []) print(e);
-      });
-      const text = args.messages.join(" ").trim();
-      if (text) {
-        if (args.faux) scriptTurn(parts.faux, [args.faux]);
-        await parts.conversation.submit({ type: "input", content: text }, parts.context);
-        await parts.conversation.waitForIdle(parts.context);
-      }
-      await parts.harness.waitForIdle(parts.context);
-      watch.stop?.();
-    } else if (out === "rpc") {
+    if (mode === "rpc") {
       console.log(JSON.stringify({ ok: true, command: "ready", conversationId: parts.conversation.id, commands: commandNames() }));
       for (const line of readStdinLines()) {
-        let msg;
-        try { msg = JSON.parse(line); }
-        catch (err) { console.log(JSON.stringify({ ok: false, error: `invalid command: ${String(err?.message ?? err)}` })); continue; }
-        if (args.faux && msg.command === "prompt") scriptTurn(parts.faux, [args.faux]);
-        try {
-          const reply = await handle(parts, msg);
-          console.log(JSON.stringify({ ok: true, command: msg.command, ...reply }));
-        } catch (err) {
-          console.log(JSON.stringify({ ok: false, command: msg.command, error: String(err?.message ?? err) }));
-        }
+        const answer = await rpcLine(parts, line);
+        console.log(JSON.stringify(answer));
       }
     } else {
-      const text = args.messages.join(" ").trim();
-      if (!text) throw new Error("print mode needs a prompt; run with --help");
-      if (args.faux) scriptTurn(parts.faux, [args.faux]);
-      await parts.conversation.submit({ type: "input", content: text }, parts.context);
-      await parts.conversation.waitForIdle(parts.context);
-      const answer = answerText(await transcript(parts.conversation, parts.context, 20));
-      if (!answer) throw new Error("the run committed no assistant text");
-      console.log(answer);
-      if (args.hold) await new Promise((r) => setTimeout(r, args.hold));
+      const text = parts.intent.prompt;
+      if (!text && !args.continue && !args.resume && !args.conversation) throw new Error("print mode needs a prompt; run with --help");
+      if (text) {
+        // The offline plane is armed here because the print/json surfaces queue their own input; RPC
+        // arming lives in src/cli-intent.mjs' rpcLine, which owns that path's prompts.
+        if (parts.intent.faux) scriptTurn(parts.faux, [parts.intent.faux]);
+        // The queued input is recorded on the shared path's settlement list, so `settleInvocation` waits
+        // for an answer rather than leaving the input parked in pi.inbox for the next process to replay.
+        const queued = await parts.conversation.submit({ type: "input", content: text, requestId: `cli-${process.pid}` }, parts.context);
+        parts.settlements.push(queued.id);
+      }
+      await settleInvocation(parts);
+      const entries = await transcript(parts.conversation, parts.context, 200);
+      if (mode === "json") {
+        // NDJSON of pi-durable's committed entries, oldest first: the record IS the entry (kind, EntryId,
+        // the message the provider saw), so a viewer counts events instead of reconstructing turns.
+        for (const entry of entries.slice().reverse()) console.log(JSON.stringify(agentEvent(entry)));
+      } else {
+        const answer = finalAnswerText(entries);
+        if (!answer) throw new Error("the run committed no assistant text");
+        console.log(answer);
+        if (args.hold) await new Promise((r) => setTimeout(r, args.hold));
+      }
     }
   } finally {
-    // Release only after the transport is gone, so an attaching client never reaches a socket whose
-    // owner already stopped serving.
     server?.close();
     if (claim) releaseWriter(store);
   }
