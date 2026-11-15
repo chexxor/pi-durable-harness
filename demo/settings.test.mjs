@@ -21,7 +21,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import { piSettings, durableSettings, effectiveDefaults, agentConfig, contextSections, describeResolution } from "../src/settings.mjs";
-import { openHarness, transcript } from "../src/core.mjs";
+import { openHarness, transcript, prompt, scriptTurn } from "../src/core.mjs";
 import { configure } from "@earendil-works/pi-durable";
 import { DEFAULT_COMPACTION_POLICY, DEFAULT_PROGRESS_POLICY, DEFAULT_RESTART_LIMIT, DEFAULT_RETRY_POLICY } from "@earendil-works/pi-durable";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
@@ -183,6 +183,23 @@ async function main() {
   `agent compaction=${JSON.stringify(agentState?.compaction)} thinkingLevel=${JSON.stringify(agentState?.thinkingLevel)}`);
  record(agentState?.model?.provider === "faux" && agentState?.model?.modelId === "faux-1",
   "the resolved model choice is what pi-durable stored for the conversation", JSON.stringify(agentState?.model));
+ // 9) The OFF switch has an EFFECT, not only a value: pi-durable gates BOTH automatic compaction paths
+  // on the resolved policy - dist/harness/compaction.js `compactionPolicy` answers `enabled: conversationModel?.enabled
+  // ?? (conversation?.enabled === false ? false : field("enabled"))` (its comment: "turning compaction off for a
+  // conversation does not depend on the model"), and dist/harness/generation.js gates the threshold path
+  // (`thresholdCompaction` returns undefined when `!policy.enabled`) and the overflow path (the branch requires
+  // `compaction?.enabled === true`). So a grown context plus an explicit compact under pi's off switch commits
+  // NO `pi.compaction` entry - the same call with the switch on is what demo/packages.test.mjs shows instead.
+  await scriptTurn(harnessParts.faux, ["first grown answer", "second grown answer"]);
+  await prompt(conversation, "grow one", harnessParts.context);
+  await prompt(conversation, "grow two", harnessParts.context);
+  const kindsBefore = (await transcript(conversation, harnessParts.context, 80)).map((row) => row.kind);
+  const offAnswer = await conversation.compact("keep the durable facts", harnessParts.context);
+  const kindsAfter = (await transcript(conversation, harnessParts.context, 80)).map((row) => row.kind);
+  record(!kindsAfter.includes("pi.compaction") && kindsAfter.length === kindsBefore.length,
+   "pi's compaction.enabled:false stops pi-durable from committing a summary entry (no pi.compaction row lands)",
+   `kindsBefore=${kindsBefore.length} kindsAfter=${kindsAfter.length} answer=${JSON.stringify(offAnswer)}`);
+
  const second = await openHarness({ cwd, storePath: join(root, "harness.sqlite") });
  const reopened = await second.harness.conversation(conversation.id, second.context);
  const reopenedAgent = reopened === undefined ? null : await reopened.agent(second.context);

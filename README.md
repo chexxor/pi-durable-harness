@@ -17,7 +17,8 @@ that claim mechanically (see [docs/provenance.md](docs/provenance.md)).
 npm install
 node scripts/sync-pi.mjs --offline --report  # PIN | DECLARED | RESOLVED, drift said as NOT MEASURED
 node scripts/sync-pi.mjs --report           # the same three planes PLUS drift measured upstream (reaches network)
-node scripts/suite.mjs                      # every offline demo + both audits, one tally (no keys, no network)
+node scripts/suite.mjs                      # every offline demo + the three audits, one tally (no keys, no network)
+node scripts/diagnose-context-budget.mjs     # pi's settings/package plane for THIS cwd, and why a session kept native compaction
 ```
 
 The suite runs the pin report with `--offline` (its provenance line ends `pinReport=offline`), because the
@@ -140,8 +141,16 @@ because the opener applies migrations on open — see [docs/attach.md](docs/atta
 `SettingsManager` into pi-durable's named settings and agent config; the defaults are pi-durable's
 own exported constants (`DEFAULT_RETRY_POLICY`, `DEFAULT_COMPACTION_POLICY`, `DEFAULT_PROGRESS_POLICY`,
 `DEFAULT_RESTART_LIMIT`), and what pi names and pi-durable does not is returned as **rows**, not folded
-away. `demo/settings.test.mjs` (27 checks) also reads the policy back out of pi-durable's own durable
+away. `demo/settings.test.mjs` (28 checks) also reads the policy back out of pi-durable's own durable
 state (`conversation.agent()`), so "compaction off" survives a reopen instead of being a per-process flag.
+
+The switch has an EFFECT, not only a value: pi-durable gates BOTH automatic compaction paths on the
+resolved policy (`compactionPolicy` in `dist/harness/compaction.js`, `thresholdCompaction` and the overflow
+branch in `dist/harness/generation.js`), and the demo shows a grown context plus an explicit `compact()`
+under `enabled: false` committing **no** `pi.compaction` entry. What pi's context budget does in THIS
+workspace — including why one long session kept native compaction after the project settings landed, and
+which sessions handed off through the package instead (`fromHook: true`) — is worked out from the tree by
+`scripts/diagnose-context-budget.mjs`, written up in [docs/context-budget.md](docs/context-budget.md).
 
 `src/providers.mjs` builds pi's model plane (`ModelRuntime`/`ModelRegistry`) and resolves model refs by
 the prefix rule it extracted from Durian-Pi's `seatmodel.mjs`; `src/spend.mjs` keeps a JSONL money
@@ -206,7 +215,7 @@ from the tags.
 
 Every source file carries a header naming the Durian-Pi file it was extracted from — and what was
 changed or omitted — or saying outright that there is no Durian-Pi original. `scripts/audit-provenance.mjs`
-checks that claim against the tree (`PROVENANCE PASS: 95/95 source files carry a header`), and
+checks that claim against the tree (`PROVENANCE PASS: 97/97 source files carry a header`), and
 `docs/provenance.md` is that audit's output: a table of file → source → what changed, so the extraction is
 re-derivable rather than a paragraph of prose.
 
