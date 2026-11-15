@@ -254,13 +254,14 @@ const PARSED_FLAGS = (() => {
  for (const file of FILES) {
   const isParser = /\bparseArgs\(|process\.argv|argv\[/.test(file.text);
   if (!isParser) continue;
-  for (const match of file.text.matchAll(/["'`](-{1,2}[A-Za-z][A-Za-z0-9-]*)["'`]/g)) out.add(match[1]);
+  const stripped = stripComments(file.text); // a flag spelled only in a header comment is not a flag this takes
+  for (const match of stripped.matchAll(/["'](-{1,2}[A-Za-z][A-Za-z0-9-]*)["']/g)) out.add(match[1]);
   // A table that compares a stripped name: `if (name === "store")` inside a `startsWith("--")` branch.
   // The flag is the harness's own there, exactly like the quoted "--store" spelling would be.
   if (/startsWith\("-{1,2}/.test(file.text)) {
-   for (const match of file.text.matchAll(/(?:===|==|case)\s*\(?"([a-z][a-z0-9-]*)"/g)) out.add("--" + match[1]);
+   for (const match of stripped.matchAll(/(?:===|==|case)\s*\(?"([a-z][a-z0-9-]*)"/g)) out.add("--" + match[1]);
   }
-  for (const match of file.text.matchAll(/["'`](-[A-Za-z])["'`]/g)) out.add(match[1]);
+  for (const match of stripped.matchAll(/["'](-[A-Za-z])["']/g)) out.add(match[1]);
  }
  return out;
 })();

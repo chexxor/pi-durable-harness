@@ -113,8 +113,8 @@ ledger separate from pi-durable's usage plane, and classifies endpoints (loopbac
 
 The pi package ecosystem is reused through pi's own library exports, and every capability pi has that
 pi-durable does not is **named** rather than quietly dropped: [docs/package-support.md](docs/package-support.md)
-is generated from `src/packages/matrix.mjs` by `scripts/render-matrix.mjs` — 79 rows
-(8 native / 29 shimmed / 42 unsupported), evidence per row, plus the packages actually installed on
+is generated from `src/packages/matrix.mjs` by `scripts/render-matrix.mjs` — 82 rows
+(8 native / 32 shimmed / 42 unsupported), evidence per row, plus the packages actually installed on
 this machine and what loaded from them. `src/packages/loader.mjs` uses pi's `DefaultResourceLoader`,
 `discoverAndLoadExtensions` and `loadProjectContextFiles`; `src/packages/adapter.mjs` maps pi's
 `registerTool`, `tool_call`/`tool_result`/provider/compaction handlers, skills, prompts, themes and
@@ -129,8 +129,10 @@ actually parses argv spells that literal. What that audit forces into the open i
 surface: its ExtensionContext accessors, its ExtensionAPI methods (`sendMessage`, `setModel`,
 `getActiveTools`, `registerMcpServer`, `getSettings`, …), its Custom UI class (ctx.ui dialogs, the in-TUI
 editor, autocomplete, theme/renderer knobs), and its CLI verbs this harness does not take (`--export`,
-`--name`, `--credentials`, pi's mcp add/login options) — every one named as shimmed or unsupported with a
-reason, none silently dropped. What that audit now forces into the open is pi's whole extension
+`--name`, `--thinking`, `--skill`/`--theme`, `--json`, `--version`, `--offline`, `--credentials`, pi's
+package-update aliases (`--all`/`--force`/`--self`) and pi's mcp add/login options (`--env`, `--url`,
+`--header`, `--timeout`, `--description`) — every one named as shimmed or unsupported with a reason a
+reader can check against the tree, none silently dropped. What that audit now forces into the open is pi's whole extension
 surface: its ExtensionContext accessors, its ExtensionAPI methods (`sendMessage`, `setModel`,
 `getActiveTools`, `registerMcpServer`, `getSettings`, …), and its Custom UI class (ctx.ui dialogs, the
 in-TUI editor, autocomplete, theme/renderer knobs) — all named as shimmed or unsupported with a reason.
