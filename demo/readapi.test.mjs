@@ -13,6 +13,8 @@
 //      before and after the viewer runs);
 //   5. the read-only sqlite FILE open is NOT the way to view a store (measured failure), and the
 //      viewer in this file is not doing that.
+//   6. the ONE storage opener rule over the WHOLE tree: no file runs SQL or imports an sqlite
+//      binding, and inside src/ only the writer path and the read API call pi-durable's opener.
 import { Harness } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { openHarness, prompt, scriptTurn, transcript } from "../src/core.mjs";
@@ -21,7 +23,7 @@ import { readFeed, follow } from "../src/eventfeed.mjs";
 import { handle as rpcHandle, commandNames } from "../src/rpc.mjs";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { ReadOnlySession } from "@earendil-works/pi-durable";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -164,6 +166,34 @@ check("a running tool call shows as a streaming row", partialRows.length >= 1, `
 check("a partial row carries no entry id", partialRows.every((row) => !row.id), partialRows.map((row) => row.id).join(","));
 check("entry rows never include the partial", entryRows.every((row) => row.kind !== "partial"), `${entryRows.length} entry rows`);
 await feedRun.harness.close(feedRun.context);
+
+// 6. the ONE storage opener rule, checked over the whole tree rather than asserted in prose: nothing
+//    in this repo runs SQL, imports an sqlite binding, or opens a second mutation line - pi-durable's
+//    opener applies the migrations, so a SQL call here would be a line this harness never owns.
+const codeOf = (file) => {
+	const text = readFileSync(file, "utf8");
+	return text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+};
+const walk = (dir) => {
+	const out = [];
+	for (const entry of readdirSync(dir, { withFileTypes: true })) {
+		if (entry.name === "node_modules" || entry.name.startsWith(".")) continue;
+		const path = join(dir, entry.name);
+		if (entry.isDirectory()) out.push(...walk(path));
+		else if (entry.name.endsWith(".mjs")) out.push(path.replace(process.cwd() + "/", ""));
+	}
+	return out;
+};
+const repoCode = ["cli.mjs", ...walk("src"), ...walk("demo"), ...walk("scripts")].sort();
+// the bindings and statements pi-durable would have to see for a SECOND mutation line; spelled in
+	// pieces so this very check cannot match its own patterns.
+	const SQL_RULES = [new RegExp("better-" + "sqlite" + "3"), new RegExp("node:" + "sqlite"), new RegExp("sqlite" + "3"),
+		new RegExp("(SEL" + "ECT|INSER" + "T|UPDAT" + "E|DELET" + "E)\b[^\n]{0,40}?\b(FRO" + "M|WHER" + "E|INT" + "O|VALUE" + "S)\b")];
+const sqlHits = repoCode.filter((f) => SQL_RULES.some((re) => re.test(codeOf(f))));
+check("no file in the repo runs SQL or imports an sqlite binding", sqlHits.length === 0, sqlHits.join(","));
+const srcOpener = repoCode.filter((f) => f.startsWith("src/") && /openNodeSqliteStorage/.test(codeOf(f)));
+check("inside src/, only the writer path and the read API call pi-durable's storage opener",
+	srcOpener.join(",") === "src/core.mjs,src/readapi.mjs", srcOpener.join(","));
 
 console.log(`readapi: ${passed}/${total} checks passed`);
 process.exit(passed === total ? 0 : 1);
