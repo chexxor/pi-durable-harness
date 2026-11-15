@@ -235,6 +235,23 @@ async function main() {
   "pi's --session-dir is refused loudly rather than guessed",
   `${JSON.stringify((badFlag.stderr + badFlag.stdout).trim().slice(0, 90))}`);
 
+ // 7) The interactive TUI is reachable from the CLI itself, not only from a two-process fixture:
+ //    --tui paints the writer view over the conversation THIS process owns, and a typed line becomes
+ //    one durable submission on this process\'s own mutation line (src/tui/writer.mjs).
+ const tuiRun = await runScript(CLI, ["--store", store, "--cwd", cwd, "--faux", fauxReply, "--tui"], { stdin: "hello tui\nq\n" });
+ record(tuiRun.exit === 0 && tuiRun.stderr.includes("submitted: requestId=") && tuiRun.stderr.includes("submissionId="),
+  "--tui submits a typed line to the session this process owns (acknowledgements go to stderr)",
+  `stderr=${JSON.stringify(tuiRun.stderr.trim().slice(0, 140))}`);
+ const tuiProof = await runScript(CLI, ["--store", store, "--cwd", cwd, "-c", "--mode", "json"]);
+ const tuiRecords = tuiProof.stdout.split("\n").filter((l) => l.trim()).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+ const tuiUser = tuiRecords.filter((r) => r.type === "message_end" && r.message?.role === "user" && JSON.stringify(r.message).includes("hello tui"));
+ record(tuiUser.length === 1,
+  "the typed TUI line is committed on the SAME store line the other modes use",
+  `user records naming it=${tuiUser.length} of ${tuiRecords.filter((r) => r.type === "message_end" && r.message?.role === "user").length} user records`);
+ record(tuiRecords.some((r) => r.type === "session") && tuiRecords.some((r) => r.type === "message_end" && r.message?.role === "assistant"),
+  "the reopen prints pi\'s session header and the assistant answers the TUI turn committed",
+  `records=${tuiRecords.length} types=${[...new Set(tuiRecords.map((r) => r.type))].join(",")}`);
+
  for (const n of notes) console.log(n);
  const failed = checks.filter((c) => !c.condition);
  console.log(`cli: ${checks.length - failed.length}/${checks.length} checks passed`);

@@ -336,7 +336,13 @@ async function writerTui(parts, args, reader) {
   while (true) {
     const item = await reader.next();
     if (item.done) break;
-    const answer = driver.noteData(item.value);
+    // a scripted session (no TTY) sends whole lines; pi-tui's overlay takes one keystroke at a time and
+    // submits on the ENTER key, so the line is split into characters and its terminator becomes ENTER.
+    let answer = { quit: null };
+    for (const ch of `${item.value}${item.value.endsWith("\n") ? "" : "\n"}`) {
+      answer = driver.noteData(ch);
+      if (answer.quit) break;
+    }
     await flushTyped();
     if (answer.quit) { quit = answer.quit; break; }
     await driver.poll(Date.now());

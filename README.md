@@ -34,7 +34,8 @@ Then the four CLI surfaces, each proved by `demo/cli.test.mjs` and `demo/tui.tes
 node cli.mjs -p "hello"                    # print mode: stdout is the final answer text only
 node cli.mjs --mode json -p "hello"        # NDJSON: pi's session header + event records (docs/json.md)
 node cli.mjs --mode rpc                    # pi's protocol: {"type":"prompt",...} in, {"type":"response",...} out
-node demo/tui-interactive.mjs --store harness.sqlite --writer-socket <the owner's socket>
+node cli.mjs --tui                          # the interactive TUI over the session THIS process owns
+node demo/tui-interactive.mjs --store harness.sqlite --writer-socket <the owner's socket>  # a viewer of someone else's session
 ```
 
 All four open the SAME harness-invocation path (`src/cli-intent.mjs`), so the difference between them
