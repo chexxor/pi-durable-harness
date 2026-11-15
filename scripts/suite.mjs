@@ -58,13 +58,17 @@ function demos() {
 	return readdirSync(DEMO_DIR).filter((f) => f.endsWith(".test.mjs")).sort();
 }
 
-function run(file) {
+function runScript(argv) {
 	try {
-		const out = execFileSync("node", [join(DEMO_DIR, file)], { cwd: ROOT, encoding: "utf8", timeout: 180000 });
+		const out = execFileSync("node", argv, { cwd: ROOT, encoding: "utf8", timeout: 180000 });
 		return { ok: true, out };
 	} catch (err) {
 		return { ok: false, out: String(err?.stdout ?? "") + String(err?.stderr ?? err?.message ?? err) };
 	}
+}
+
+function run(file) {
+	return runScript([join(DEMO_DIR, file)]);
 }
 
 const line = provenanceLine();
@@ -83,5 +87,21 @@ for (const file of demos()) {
 		for (const l of r.out.split("\n")) if (l.trim()) console.log(`  ${l}`);
 	}
 }
-console.log(`SUITE pass=${pass} fail=${fail} demos=${pass + fail} (${line.split(" ")[1]})`);
+// The two audits run in the same command as the demos, so "the suite is green" means one thing every
+	// time: the demos pass, the tree has no code-level dependency on the dropped orchestration layer, and
+	// every source file still names where it came from. Each is a check rather than a prose claim, and a
+	// suite that ran only the demos would be green on a tree that violated either.
+	for (const script of ["audit-orchestration.mjs", "audit-provenance.mjs"]) {
+	 const audit = runScript([join(ROOT, "scripts", script)]);
+	 if (audit.ok) {
+	 pass++;
+	 console.log(`PASS ${script}`);
+	 for (const l of audit.out.split("\n")) if (l.trim()) console.log(` ${l.trim()}`);
+	 } else {
+	 fail++;
+	 console.log(`FAIL ${script}`);
+	 for (const l of audit.out.split("\n")) if (l.trim()) console.log(` ${l.trim()}`);
+	 }
+ }
+console.log(`SUITE pass=${pass} fail=${fail} demos+audits=${pass + fail} (${line.split(" ")[1]})`);
 process.exitCode = fail ? 1 : 0;
