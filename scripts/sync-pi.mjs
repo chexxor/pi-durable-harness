@@ -15,7 +15,12 @@ const HERE = fileURLToPath(import.meta.url);
 const ROOT = resolve(join(dirname(HERE), ".."));
 const PIN_PATH = join(ROOT, "pi-main.pin.json");
 const VENDOR = join(ROOT, "vendor", "pi-main");
-const FLAGS = ["--report", "--sync", "--update", "--observe", "--link", "--unlink"];
+const FLAGS = ["--report", "--sync", "--update", "--observe", "--link", "--unlink", "--offline"];
+
+// --offline is a REPORT mode: no verb that reaches upstream runs in it. Module-level because
+// upstreamRefs() is called by driftReport and by --update/--observe, and all of them have to answer
+// the same question - "did this run contact upstream?" - without threading a flag through each call.
+let offline = false;
 
 function sh(cmd, args, cwd) {
 	// @temp: read-only inspection; a failure is data so a report can still answer without upstream.
@@ -92,6 +97,9 @@ export function upstreamRefs(pin) {
 	// No branch means no ref to measure against. Inventing "main" would guess upstream's default,
 	// so the answer is null and the drift line says what to fix (`--update <tag>`).
 	if (!pin.branch) return null;
+	// --offline means upstream was NOT contacted: the same null answer as an unreachable upstream,
+	// and driftReport says which of the two nulls this is, so an offline report never reads as "current".
+	if (offline) return null;
 	const res = sh("git", ["ls-remote", pin.repo], ROOT);
 	// A failed ls-remote means "cannot compare". Reporting no drift here would claim the pin is
 	// current on the day upstream is hundreds of commits ahead - the silence this rig exists to
@@ -185,6 +193,11 @@ export function cmpVersion(a, b) {
 }
 
 export function driftReport(pin) {
+ // --offline is its own answer, not "cannot compare": a report that said "no drift" here would claim the pin
+ // is current on evidence that was never gathered, and "cannot compare" would read like a broken rig.
+ if (offline) {
+ return { lines: [`DRIFT: not measured this run (--offline): ${pin.repo} was NOT contacted, so the pin is neither current nor stale on this evidence - run without --offline to measure it`], unknown: true, offline: true };
+ }
  const refs = upstreamRefs(pin);
  if (refs === null) return { lines: [`DRIFT: cannot compare against ${pin.repo} - the pin is UNVERIFIED against upstream, not current`], unknown: true };
  if (!pin.branch) return { lines: ["DRIFT: cannot compare - pi-main.pin.json names no branch; `--update <tag>` adds one"], unknown: true };
@@ -231,6 +244,10 @@ function out(payload) {
 
 function main(argv) {
  const args = parseArgs(argv);
+ offline = Boolean(args.offline);
+ if (args.offline && (args.sync || args.update || args.observe || args.link)) {
+  throw new Error("--offline refuses the verbs that reach upstream (--sync/--update/--observe/--link); offline is a report mode only");
+ }
  if (args.unlink) {
   const r = sh("npm", ["install"], ROOT);
   out({ ok: r.status === 0, command: "sync-pi", action: "unlink", dependencies: "released packages", warning: "--unlink is NOT a rollback: it restores the RELEASED packages, and a released pi-durable cannot open a store migrated past the schema it understands. Rollback = restore a backup." });
@@ -270,7 +287,7 @@ function main(argv) {
  const drift = driftReport(pin);
  for (const line of rep.lines) console.log(line);
  for (const line of drift.lines) console.log(line);
- out({ ok: true, command: "sync-pi", pin: describePinRef(pin), pinSha: pin.sha, ref: pin.ref, refType: pin.refType, declared: rep.plane.verdict, resolved: rep.dep.set, fallback: rep.fallback, drift: drift.unknown ? "unknown" : "measured" });
+ out({ ok: true, command: "sync-pi", pin: describePinRef(pin), pinSha: pin.sha, ref: pin.ref, refType: pin.refType, declared: rep.plane.verdict, resolved: rep.dep.set, fallback: rep.fallback, drift: drift.offline ? "offline" : drift.unknown ? "unknown" : "measured" });
  process.exitCode = rep.plane.mismatches.length ? 1 : 0;
 }
 

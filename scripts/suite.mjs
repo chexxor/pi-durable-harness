@@ -45,13 +45,16 @@ function provenanceLine() {
 	// dependencySet comes from sync-pi's classification, so "built" cannot mean two things.
 	let set = "unknown";
 	try {
-		const out = execFileSync("node", [join(ROOT, "scripts", "sync-pi.mjs"), "--report"], { cwd: ROOT, encoding: "utf8" });
+		// The suite runs the pin report OFFLINE, and says so in the provenance line: the suite's whole claim
+		// is that a verdict came without a network, and a report that reached upstream would make that
+		// claim unprovable. `--offline` prints the same PIN/DECLARED/RESOLVED planes and an honest DRIFT line.
+		const out = execFileSync("node", [join(ROOT, "scripts", "sync-pi.mjs"), "--offline", "--report"], { cwd: ROOT, encoding: "utf8" });
 		const match = /via=(\S+)/.exec(out);
 		set = match ? match[1] : "unknown";
 	} catch {
 		set = "report-failed";
 	}
-	return `PROVENANCE tree=${tree} branch=${branch} uncommitted=${dirty ?? "unknown"} node=${process.version} host=${process.platform} ${release()} ${pinSummary()} dependencySet=${set}`;
+	return `PROVENANCE tree=${tree} branch=${branch} uncommitted=${dirty ?? "unknown"} node=${process.version} host=${process.platform} ${release()} ${pinSummary()} dependencySet=${set} pinReport=offline`;
 }
 
 function demos() {

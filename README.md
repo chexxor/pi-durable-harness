@@ -15,9 +15,18 @@ that claim mechanically (see [docs/provenance.md](docs/provenance.md)).
 
 ```bash
 npm install
-node scripts/sync-pi.mjs --report     # PIN | DECLARED | RESOLVED, drift reported on every run
-node scripts/suite.mjs                # every offline demo + both audits, one tally (no keys, no network)
+node scripts/sync-pi.mjs --offline --report  # PIN | DECLARED | RESOLVED, drift said as NOT MEASURED
+node scripts/sync-pi.mjs --report           # the same three planes PLUS drift measured upstream (reaches network)
+node scripts/suite.mjs                      # every offline demo + both audits, one tally (no keys, no network)
 ```
+
+The suite runs the pin report with `--offline` (its provenance line ends `pinReport=offline`), because the
+suite's claim is that a verdict came with no network. That offline-ness is measured, not asserted: running
+the suite under `strace -f -e trace=connect` records **0** `AF_INET` connects — only `AF_UNIX`, which are
+the demos' own unix sockets — while a `--report` that omits `--offline` records one
+`connect(…, AF_INET, sin_port=htons(443))` to `github.com`, made by `git ls-remote`. `--offline` refuses
+`--sync/--update/--observe/--link`: offline is a report mode, not a way to move a pin on evidence nobody
+gathered.
 
 Then the four CLI surfaces, each proved by `demo/cli.test.mjs` and `demo/tui.test.mjs`:
 
@@ -60,8 +69,9 @@ invocation, refuses refs upstream does not have, and prints the three planes (pi
 resolved). Verified symbols come from the pinned dist `.d.ts` files, not from assumptions.
 
 Current state on this machine: `PIN tag "v1.5.1"`, `DECLARED 10 packages, all resolving 1.5.1`,
-`RESOLVED all 10 pinned packages`, `via=lockfile-released`, no `LOUD FALLBACK` line, and upstream
-drift reported as one published tag (`v1.5.2`) behind the pin.
+`RESOLVED all 10 pinned packages`, `via=lockfile-released`, no `LOUD FALLBACK` line. With network, drift is
+measured and reported as one published tag (`v1.5.2`) behind the pin; offline, the drift line says
+`not measured this run (--offline)` rather than claiming the pin is current.
 
 ## Reading a session
 
