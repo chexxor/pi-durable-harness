@@ -16,8 +16,9 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createModels, fauxProvider, fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import * as durable from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
-import { CodingTools, createBashTool } from "@earendil-works/pi-durable/tools";
+import { CodingTools, createBashTool, createReadTool, createWriteTool, createEditTool } from "@earendil-works/pi-durable/tools";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
+import { makeEnv } from "./executionenv.mjs";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -25,7 +26,7 @@ import { join, resolve } from "node:path";
 // Durian-Pi's adapter installed exactly this list; the codemode extension is opt-in here because
 // codemode needs the sandbox package and a worker budget, and a demo that does not use it should
 // not pay for it.
-export function defaultToolExtensions({ bash = true, codemode = false } = {}) {
+export async function defaultToolExtensions({ bash = true, codemode = false } = {}) {
 	const extensions = [CodingTools];
 	// A separate extension for the shell so a caller can deny bash without losing read/write/edit.
 	// `registry.install` replaces by name, so an extension name is an identity, not a label.
@@ -33,9 +34,28 @@ export function defaultToolExtensions({ bash = true, codemode = false } = {}) {
 	if (codemode) {
 		// Lazy: @earendil-works/pi-codemode is a heavier dependency, and it is only needed when asked.
 		// @temp: kept as a dynamic import so a harness opened without codemode never loads it.
-		return extensions;
+		const codemodePackage = await import("@earendil-works/pi-codemode");
+		if (!codemodePackage.Codemode) throw new Error("@earendil-works/pi-codemode exports no Codemode extension at this pin");
+		extensions.push(codemodePackage.Codemode);
 	}
 	return extensions;
+}
+
+/**
+ * The toolset named by tool name, for a caller that wants a smaller toolset than the coding default
+ * (`--tools`, `--exclude-tools`). pi-durable ships these tools separately, so a name list is honest
+ * here: the registry then only OFFERS those tools, and a call to anything else is refused by the
+ * Harness rather than by our own guard.
+ * @temp: unknown names are reported instead of silently dropping a tool the caller asked for.
+ */
+export function namedToolExtensions(names) {
+	const known = { read: createReadTool, write: createWriteTool, edit: createEditTool, bash: createBashTool };
+	const missing = names.filter((n) => !known[n]);
+	if (missing.length) throw new Error(`unknown tool names ${missing.join(", ")}; the names are ${Object.keys(known).join(", ")}`);
+	// One extension carrying exactly the named tools, so the registry offers exactly those names.
+	// @temp: same extension name every call, which is what makes a later call replace an earlier
+	// @temp: toolset instead of stacking a second one on top of it.
+	return [durable.defineExtension({ name: "tools", tools: names.map((n) => known[n]()) })];
 }
 
 /**
@@ -44,18 +64,39 @@ export function defaultToolExtensions({ bash = true, codemode = false } = {}) {
  * wrong plane.
  */
 export async function openHarness(options = {}) {
-	const { cwd = process.cwd(), storePath = null, settings, agent, registry = null, tools = true } = options;
+	const { cwd = process.cwd(), storePath = null, settings, agent, registry = null, tools = true, toolNames = null, excludeTools = [] } = options;
 	const context = options.context ?? BACKGROUND_CONTEXT;
 
 	const storage = storePath ? await openNodeSqliteStorage(resolve(storePath)) : new durable.MemoryStorage();
-	// The registry is the toolset, and it is shared: the core installs the coding tools into it, and
-	// the package loader (task-8) installs discovered pi extensions into the same one.
+	// The registry is the toolset, and it is shared: the core installs the coding tools into it, the
+	// tool surface (task-4) installs its own tool and guard through `extraExtensions`, and the package
+	// loader (task-8) installs discovered pi extensions into the same one.
 	const reg = registry ?? durable.createRegistry();
-	if (tools) for (const extension of defaultToolExtensions(options.toolOptions ?? {})) reg.install(extension);
+	const defaults = await defaultToolExtensions(options.toolOptions ?? {});
+	if (tools) {
+		for (const extension of toolNames ? namedToolExtensions(toolNames) : defaults) reg.install(extension);
+	}
+	// Extensions a caller installs after the defaults: the same name replaces (see the note in the
+	// exclusion block below), which is what lets a caller swap a toolset rather than add beside it.
+	for (const extension of options.extraExtensions ?? []) reg.install(extension);
+	// A denial that names a tool the defaults do not offer is a caller error, not a no-op: silently
+	// accepting it would let a typo re-open a tool the caller meant to close.
+	// @temp: checked against the offered names, so exclude cannot resurrect a tool under another name.
+	if (excludeTools.length) {
+		const known = ["read", "write", "edit", "bash"];
+		const stale = excludeTools.filter((n) => !known.includes(n));
+		if (stale.length) throw new Error(`--exclude-tools names tools that are never offered: ${stale.join(", ")}`);
+		const offered = known.filter((n) => !excludeTools.includes(n));
+		if (!offered.length) throw new Error("every tool is excluded; pass --no-tools instead");
+		// Re-install the smaller set over the default set: `registry.install` replaces by extension
+		// name, so the same name is what makes the replacement happen instead of an accumulation.
+		for (const extension of namedToolExtensions(offered)) reg.install(extension);
+	}
 
 	// Tools reach files and processes only through this environment, built per call from the
-	// conversation agent's cwd - the Harness calls it, we do not hold an env.
-	const env = (target) => new NodeExecutionEnv({ cwd: target.cwd ?? cwd });
+	// conversation agent's cwd - the Harness calls it, we do not hold an env. src/executionenv.mjs owns
+	// what the environment is; this file only decides WHEN a fresh one is built.
+	const env = (target) => makeEnv({ cwd: target.cwd ?? cwd });
 
 	// The offline model plane: pi-ai's faux provider, no credentials, no network, scripted replies.
 	// It is armed only when the caller handed in no real `models`, so a run can never claim that a

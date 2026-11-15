@@ -116,16 +116,34 @@ async function main() {
 
   // Claim before opening: the process that opens the store is the process that owns the mutation
   // line, so a second invocation cannot double-own it.
+  // --tools / --exclude-tools are enforced by a beforeTool hook, not by hiding the tool: the refusal
+  // --tools / --exclude-tools choose the OFFERED toolset: pi-durable settles a call to a tool the
+  // request did not offer as `tool_unavailable` (node_modules/@earendil-works/pi-durable/dist/harness/
+  // tool.d.ts: "A call to a tool its request did not offer: settles `tool_unavailable`"), so the
+  // refusal is a committed tool result the model can see, not a guess we make here.
+  // @temp: the deny list wins over the allow list, so a typo in an allowed list can never re-open
+  // @temp: a tool the caller meant to close.
+  const denied = new Set(args.excludeTools ?? []);
+  const allowed = args.tools ? args.tools.filter((n) => !denied.has(n)) : null;
   const claim = args.noSession ? null : claimWriter(store);
   const parts = await openHarness({
     cwd: process.cwd(),
     storePath: args.noSession ? null : store,
     tools: !args.noTools,
+    ...(allowed ? { toolNames: allowed } : {}),
+    ...(denied.size ? { excludeTools: [...denied] } : {}),
     agent: {
       model: args.model ? { provider: args.provider ?? "faux", modelId: args.model } : { provider: "faux", modelId: "faux-1" },
       ...(args.systemPrompt ? { instructions: args.systemPrompt } : {}),
     },
   });
+  // --conversation opens a specific conversation of the same store instead of the root one: pi-durable
+  // keeps conversations by id, which is what `--session <id>` means here.
+  if (args.conversation) {
+    const opened = await parts.harness.conversation(Number(args.conversation), parts.context);
+    if (!opened) throw new Error(`no conversation ${args.conversation} in this store; the ids are what a previous run printed`);
+    parts.conversation = opened;
+  }
 
   // The owner serves its socket for the whole run, so a second invocation in this directory attaches
   // as a reader to the same session instead of opening the store a second time.
