@@ -12,3 +12,6 @@ package-lock.json.bak
 
 # pi harness state (goal ledgers, sessions, settings scratch) - not project source
 .pi/
+
+# pi extension state (context-budget handoffs) - not project source
+.ai-work/
