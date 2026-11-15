@@ -1,65 +1,112 @@
-// src/readapi.mjs - the ONE read-only surface for the store. Nothing here mutates durable state.
+// src/readapi.mjs - the ONE read-only surface for the durable store.
 //
 // PROVENANCE: extracted from ~/Git/Durian-Pi/src/readonlystore.mjs and ~/Git/Durian-Pi/src/readapi.mjs
-// (read a store another process owns), 2026-11-14 at pin v1.5.1. What changed and why:
-//   - Durian-Pi opened the store through pi-durable's opener and then queried it with its own helper
-//     layer; here the helper layer is two functions, so the "single read API" the objective asks for
-//     is literally one entry point (openStore) plus one scan (readEntries);
-//   - no SQL, no direct file reads: the store is whatever pi-durable's opener says it is;
-//   - seats/queue/broker/worktree/metrics/check/constitution/selfdev: dropped outright.
+// (a helper that read a store some other process owned), read 2026-11-14 at pin v1.5.1. What changed:
+//   - Durian-Pi re-implemented its own paging helpers over the store; here the surface is three reads
+//     (openStore, readEntries, listConversations) and every page shape is pi-durable's own `Page`;
+//   - no SQL, no direct file reads, no second storage opener of our own: the store is whatever
+//     pi-durable's one opener says it is;
+//   - seats, cross-seat queue, broker/serve, genlock, worktrees, metrics, check, constitution, selfdev:
+//     dropped outright.
 //
-// WHY a read-only Session and not a Harness (measured on the pinned 1.5.1): openNodeSqliteStorage(path,
-// {mode:"read-only"}) throws "attempt to write a readonly database" because the opener applies its
-// migrations when it opens. So a viewer opens the ordinary opener and then uses createSession, which
-// is a Session with no scheduler: it cannot start a task and cannot commit, so a second process can
-// never open a second mutation line. That is the rule src/ownership.mjs states, enforced by type.
-import * as durable from "@earendil-works/pi-durable";
+// WHY a `readOnly` Harness and not a plain open (all of this is quoted behaviour, not inference):
+//   node_modules/@earendil-works/pi-durable/dist/harness/types.d.ts:694 declares `readOnly?: boolean`
+//   inside HarnessOptions, and its doc says: "Open for reading only, as a viewer of a session that
+//   another process drives... Open recovers nothing: a `running` task stays as committed. Every commit
+//   with writes rejects with `ReadOnlySession` before it reaches Storage, and so does `resume()` and
+//   every call that enables scheduling; the Harness stays usable for reads and watches."
+//   So the viewer is structurally unable to open a second mutation line on a store another process
+//   owns - which is exactly the rule src/ownership.mjs states, enforced by pi-durable rather than by
+//   a convention we hope for.
+//   Measured on this pin: openNodeSqliteStorage(path, { mode: "read-only" }) throws
+//   "attempt to write a readonly database" - the opener applies its migrations when it opens - so a
+//   viewer opens the ordinary opener and stays read-only at the Harness, not at the file handle.
+
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
-import { createSession } from "@earendil-works/pi-durable";
+import { Harness, createRegistry } from "@earendil-works/pi-durable";
+import { createModels } from "@earendil-works/pi-ai";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { resolve } from "node:path";
 
 /**
- * Open a store for reading only. Returns a Session (not a Harness), so every method reachable
- * here is a read.
+ * Open a store the way a viewer does: pi-durable's one opener, then a `readOnly` Harness.
+ *
+ * Returns the plain storage too, because the storage plane owns the only two reads that go across
+ * conversations (`scanConversations`, `scanEntries`); both are reads by signature, so no caller of
+ * this file can turn them into writes.
  */
 export async function openStore(storePath, options = {}) {
-	const path = resolve(storePath);
-	const storage = await openNodeSqliteStorage(path, options.storage ?? {});
-	// createSession takes no scheduling: `resume()` is what a Harness calls, and nothing here calls it.
-	const session = createSession(storage, options.session ?? {});
-	return { storage, session, storePath: path };
+	const storage = await openNodeSqliteStorage(resolve(storePath), options.storage ?? {});
+	// A viewer needs a registry to describe the tools it saw, but it installs nothing: pi-durable reads
+	// the offered tools of an OPEN run from the committed transcript (`pi.system` entries), so an empty
+	// registry here is the viewer's own toolset, not a re-derivation of the writer's.
+	// A viewer still needs a registry and a model plane, because Harness.open asks for both; the viewer
+	// installs no tools and arms no provider, so nothing it holds can answer a request - it can only
+	// read what the writer committed. (Measured: Harness.open rejects without `registry` and `models`.)
+	const harness = await Harness.open(storage, {
+		readOnly: true,
+		models: options.models ?? createModels(),
+		registry: options.registry ?? createRegistry(),
+		...(options.harness ?? {}),
+	}, BACKGROUND_CONTEXT);
+	return { storage, harness, storePath: resolve(storePath) };
 }
 
 /**
- * One page of committed entries, oldest first, with a monotonic `seq` cursor.
+ * One page of a conversation's committed entries, with pi-durable's own cursor.
  *
- * The cursor is the highest `seq` returned; handing it back yields strictly newer entries, which is
- * what makes `--since` and `--follow` possible without re-reading the transcript. `entries()` returns
- * fork-aware history; `scanEntries` is the plain scan, and this uses the scan so a viewer sees the
- * committed line in commit order rather than a branch projection.
+ * `entries(query, limit, cursor, context)` is the fork-aware history read the Harness itself uses, so
+ * a viewer sees the same active line the writer is answering on - not a reconstruction. The cursor
+ * that comes back (`page.next`) is what resumes the scan; this file does not invent an offset, a
+ * timestamp, or a `seq` of its own.
  */
 export async function readEntries(store, conversationId, options = {}) {
-	const { limit = 50, since = null, order = "ascending" } = options;
-	const query = { conversationId, ...(order === "ascending" ? { order: "ascending" } : {}) };
-	const page = await store.session.scanEntries(query, limit, undefined);
-	let items = page.items;
-	// scanEntries answers newest-first by default; normalize to oldest-first so a viewer streams
-	// forward, then filter by cursor. Doing it here keeps the cursor rule in one place.
-	if (order !== "ascending") items = items;
-	const seqOf = (entry) => Number(entry.seq);
-	const cursor = items.reduce((m, e) => Math.max(m, seqOf(e)), since ?? 0);
-	return { items: items.filter((e) => seqOf(e) > (since ?? 0)), cursor, hasMore: items.length >= limit };
+	// `cursor` is pi-durable's own Page.next from the previous call (dist/storage/scan.d.ts: a cursor is
+	// `{after, order}`, and "a cursor continues in the order it was created with"). Passing `null`
+	// instead of omitting it is a storage request error, so the default must stay `undefined`.
+	const { limit = 50, cursor, context = BACKGROUND_CONTEXT, order = "ascending", minEntryId = null } = options;
+	const conversation = await store.harness.conversation(conversationId, context);
+	if (!conversation) throw new Error(`no conversation ${conversationId} in this store`);
+	const page = await conversation.entries({ order, ...(minEntryId ? { minEntryId } : {}) }, limit, cursor, context);
+	return { items: page.items, next: page.next, conversationId };
 }
 
-/** Every conversation this store knows about, as durable state - not a guess from filenames. */
-export async function listConversations(store) {
-	const ids = [];
+/**
+ * Every conversation the store knows about, as durable state.
+ *
+ * `scanConversations` is the storage plane's scan (dist/types.d.ts: "Scan conversations in `query.order`
+ * (default ascending) by ID"), and `Page.next` is its cursor: a store with more conversations than
+ * `limit` pages instead of being truncated at a made-up cap. ConversationRecord carries `id`, an
+ * optional fork `parent`, and an optional creator `owner` - nothing else is reported, because the
+ * store does not keep titles or timestamps for a conversation.
+ */
+export async function listConversations(store, options = {}) {
+	const { limit = 50, context = BACKGROUND_CONTEXT } = options;
+	const rows = [];
 	let cursor;
 	for (;;) {
-		const page = await store.session.scanSessions({}, 50, cursor);
-		ids.push(...page.items);
+		const page = await store.storage.scanConversations({}, limit, cursor, context);
+		for (const row of page.items) rows.push({ id: row.id, parent: row.parent ?? null, owner: row.owner ?? null });
 		if (!page.next) break;
 		cursor = page.next;
 	}
-	return ids;
+	// A scan that returns no rows on the first page is an empty store, not a failed read; the caller
+	// decides whether that is an error, so this stays a plain array.
+	return rows;
+}
+
+/**
+ * One proof-shaped usage read, so a viewer can report what a run spent without re-deriving it.
+ *
+ * @temp: the point of this helper is that the viewer never rebuilds usage from entries; pi-durable
+ * @temp: keeps the numbers, and this file only hands them over.
+ */
+export async function usage(store, conversationId = null, options = {}) {
+	const { context = BACKGROUND_CONTEXT } = options;
+	// usage() is Harness-level and conversation-scoped; a conversation-less usage read is the whole
+	// store's ledger, which is what a viewer wants when it does not know the ids yet.
+	if (conversationId === null) return await store.harness.usage(context);
+	const conversation = await store.harness.conversation(conversationId, context);
+	if (!conversation) throw new Error(`no conversation ${conversationId} in this store`);
+	return await conversation.usage(context);
 }
