@@ -1,0 +1,21 @@
+{
+  "repo": "https://github.com/earendil-works/pi.git",
+  "branch": "main",
+  "sha": "dd30101cfc5b0609411dd80b6f93adbc14db14cf",
+  "ref": "v1.5.1",
+  "refType": "tag",
+  "pinnedAt": "2026-11-10T00:00:00.000Z",
+  "note": "PIN POLICY: we pin a TAG, not main. Tag v1.5.1 is also the npm dist-tag publish, so the released packages under this pin ARE the pin release; the declared plane in package.json must read 1.5.1. The sha is refs/tags/v1.5.1, confirmed against refs/tags/v1.5.1^{} (no peel gap, so the tag is not a detached marker). main has moved ahead - drift is reported on every run.",
+  "packages": [
+    { "name": "@earendil-works/pi-durable", "dir": "packages/pi-durable" },
+    { "name": "@earendil-works/pi-ai", "dir": "packages/pi-ai" },
+    { "name": "@earendil-works/pi-agent-core", "dir": "packages/pi-agent-core" },
+    { "name": "@earendil-works/pi-coding-agent", "dir": "packages/pi-coding-agent" },
+    { "name": "@earendil-works/pi-codemode", "dir": "packages/pi-codemode" },
+    { "name": "@earendil-works/pi-mcp", "dir": "packages/pi-mcp" },
+    { "name": "@earendil-works/pi-schema", "dir": "packages/pi-schema" },
+    { "name": "@earendil-works/pi-telemetry", "dir": "packages/pi-telemetry" },
+    { "name": "@earendil-works/pi-tui", "dir": "packages/pi-tui" },
+    { "name": "@earendil-works/chord", "dir": "packages/chord" }
+  ]
+}

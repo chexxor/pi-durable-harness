@@ -1,0 +1,14 @@
+node_modules/
+vendor/
+package-lock.json.bak
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+.dhg-*/
+.scratch/
+.tmp/
+*.log
+.DS_Store
+
+# pi harness state (goal ledgers, sessions, settings scratch) - not project source
+.pi/
