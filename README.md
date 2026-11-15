@@ -113,14 +113,17 @@ ledger separate from pi-durable's usage plane, and classifies endpoints (loopbac
 
 The pi package ecosystem is reused through pi's own library exports, and every capability pi has that
 pi-durable does not is **named** rather than quietly dropped: [docs/package-support.md](docs/package-support.md)
-is generated from `src/packages/matrix.mjs` by `scripts/render-matrix.mjs` — 40 rows
-(8 native / 12 shimmed / 20 unsupported), evidence per row, plus the packages actually installed on
+is generated from `src/packages/matrix.mjs` by `scripts/render-matrix.mjs` — 55 rows
+(8 native / 17 shimmed / 30 unsupported), evidence per row, plus the packages actually installed on
 this machine and what loaded from them. `src/packages/loader.mjs` uses pi's `DefaultResourceLoader`,
 `discoverAndLoadExtensions` and `loadProjectContextFiles`; `src/packages/adapter.mjs` maps pi's
 `registerTool`, `tool_call`/`tool_result`/provider/compaction handlers, skills, prompts, themes and
 context files onto pi-durable's `defineExtension`/`defineTool`/`hook`/`section`.
 `demo/packages.test.mjs` (35 checks) proves the shim runs end to end on a fixture package and on the
-four real pi packages installed here.
+four real pi packages installed here. `scripts/audit-pi-docs.mjs` re-reads pi's OWN docs inside the
+pinned package (packages.md, extensions.md, rpc.md, cli.md, sessions.md, compaction.md), harvests the
+capabilities they enumerate (136 of them), and fails if any is named by neither a matrix row nor harness
+code — so the matrix above is checked against pi's docs, not against a list someone remembered.
 
 ## Layout
 
@@ -135,7 +138,7 @@ four real pi packages installed here.
 | `src/toolsurface.mjs`, `src/executionenv.mjs` | tool guardrails, custom tools, and the execution environment |
 | `src/packages/` | pi package discovery, pi's own loader, the extension shim, the capability matrix |
 | `demo/` | the offline demo suite (no keys, no network); `*-interactive`/`*-writer`/`*-reader` are fixtures |
-| `scripts/` | `suite.mjs` (demos + audits), `sync-pi.mjs`, `render-matrix.mjs`, the two audits |
+| `scripts/` | `suite.mjs` (demos + audits), `sync-pi.mjs`, `render-matrix.mjs`, the three audits |
 | `docs/` | capability matrix, attach semantics, provenance table |
 
 ## Provenance

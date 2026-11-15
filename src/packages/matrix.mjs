@@ -149,6 +149,61 @@ export const CAPABILITY_ROWS = [
  { capability: "compaction", names: ["compaction policy"], status: "native",
  reason: "pi-durable owns compaction (DEFAULT_COMPACTION_POLICY, the compaction task, CompactionSettings); the harness configures it rather than reimplementing it",
  evidence: "demo/settings.test.mjs" },
+ // ---- the capabilities pi's OWN docs enumerate that the harvest above found, added as rows ----
+ // These rows exist because scripts/audit-pi-docs.mjs re-reads pi's docs (packages.md / extensions.md /
+ // rpc.md / cli.md / sessions.md / compaction.md) inside the pinned package and asks of every capability
+ // pi enumerates: does a row name it, or does harness code use it? A row below is written only for a name
+ // pi's pinned dist really ships (the audit grounds on that), so a doc that gains a capability turns this
+ // file red rather than leaving the doc claiming support nobody checked.
+ { capability: "tool lifecycle event", names: ["tool_execution_start", "tool_execution_update"], status: "unsupported",
+ reason: "pi fires these while a tool runs; pi-durable's tool hooks are ToolTask.beforeTool and afterTool only, and a RUNNING tool is reported through LiveState instead (ToolSlot.status pending/running/done, DEFAULT_PROGRESS_POLICY partial/output intervals). The harness shows the running tool in its own view, but an extension subscribing to these two events never gets a call",
+ evidence: "demo/tui.test.mjs" },
+ { capability: "session info event", names: ["session_info_changed", "SessionInfoEntry"], status: "unsupported",
+ reason: "pi keeps a session-info plane (rename/label metadata) and fires when it changes; pi-durable's dist names no label or session-info plane at this pin (grep for `label`/`sessionInfo` in its dist finds nothing), so there is no change to report and no hook point to report it from",
+ evidence: null },
+ { capability: "thinking level selection", names: ["thinking_level_select"], status: "shimmed",
+ reason: "pi's event belongs to pi's UI loop and has no hook point, but the CHOICE is durable state: pi-durable's Agent carries `thinkingLevel`, and the harness resolves it from pi's settings and reads it back out of pi.agent after a reopen - so the value survives instead of living in a UI session",
+ evidence: "demo/settings.test.mjs" },
+ { capability: "user bash event", names: ["user_bash"], status: "unsupported",
+ reason: "pi's event for a shell command the USER typed in the UI. This harness's viewer never executes a user's shell command: its TUI hands a typed line to the writer CLI instead (demo/tui-interactive.mjs), and pi-durable has no hook point for such an event",
+ evidence: "demo/tui.test.mjs" },
+ { capability: "UI prompt lifecycle event", names: ["ui_prompt_start", "ui_prompt_end"], status: "unsupported",
+ reason: "pi's own TUI prompt boundaries; the harness's TUI is built on pi-tui components and owns its own input overlay (src/tui/viewmode.mjs), so there is no pi prompt to bracket and no hook point in pi-durable for one",
+ evidence: "demo/tui.test.mjs" },
+ { capability: "custom session entries", names: ["custom_message", "context_edit", "CustomMessageEntry", "ContextEditEntry"], status: "unsupported",
+ reason: "pi lets an extension inject its own session entry kinds. pi-durable's entry kinds are its own set (dist/entries.d.ts exports UserEntry, SystemEntry, AssistantEntry, ToolResultEntry, ResetEntry, CompactionEntry), and a conversation's documents are its extension point instead - the shim installs pi extension content as pi-durable sections/documents, which is what a loaded extension's extra content becomes",
+ evidence: "demo/packages.test.mjs" },
+ { capability: "tool parameter schema vocabulary", names: ["typebox", "TSchema", "StringEnum", "Type", "additionalProperties", "json-pointer-uri-fragment"], status: "shimmed",
+ reason: "pi-durable's ToolRegistration takes JSON Schema for `parameters`, so pi's TypeBox vocabulary is only usable when it has already been compiled to plain JSON; the fixture's tool declares a raw JSON schema that pi-durable validates, and pi's schema helper names are pi's own (pi maps them to its copies, docs/extensions.md 'Available Imports')",
+ evidence: "demo/packages.test.mjs" },
+ { capability: "rpc client", names: ["RpcClient"], status: "shimmed",
+ reason: "pi's rpc.md documents pi's own RpcClient for driving RPC mode; this harness's RPC mode implements the same record framing itself (src/rpc.mjs + cli.mjs), which is what the demo drives over a pipe",
+ evidence: "demo/cli.test.mjs" },
+ { capability: "branch summarization", names: ["BranchSummaryEntry", "branchSummary"], status: "unsupported",
+ reason: "pi's branch summarization is a plane of pi's own session manager (dist/core/session-manager.d.ts exports BranchSummaryEntry, dist/core/messages.d.ts carries the `branchSummary` role); pi-durable's dist names no branch summary at all at this pin, and pi's `branchSummary` SETTINGS key is kept honest as an unmapped row by src/settings.mjs rather than folded into pi-durable's compaction policy",
+ evidence: "demo/settings.test.mjs" },
+ // ---- pi's CLI flags, enumerated by pi's own docs (docs/cli.md, docs/sessions.md) ----
+ // scripts/audit-pi-docs.mjs harvests the flag tables from pi's docs inside the pinned package, so a flag
+ // pi gains turns the audit red; a flag this harness answers under ANOTHER name is still named here, with
+ // the harness's name in the reason, so a reader can find the equivalent instead of reading "unsupported".
+ { capability: "per-resource opt-out flags", names: ["--no-extensions", "--no-skills", "--no-themes", "--no-prompt-templates", "--no-context-files", "--no-builtin-tools", "--no-mcp"], status: "unsupported",
+ reason: "pi's CLI filters its resource plane at invocation time. DefaultResourceLoaderOptions at this pin carries no per-kind switch (its options are cwd, agentDir, settingsManager, eventBus and the additional*Paths lists), so this harness either loads pi's whole plane or does not load pi's loader at all; tool SELECTION is a different surface and the harness has it under its own names (--tools, --exclude-tools, --no-tools, demo/cli.test.mjs)",
+ evidence: "demo/packages.test.mjs" },
+ { capability: "credential and OAuth commands", names: ["--api-key", "--approve", "--no-approve", "--no-browser", "--bearer-token-env-var", "--oauth-client-id", "--oauth-client-secret", "--oauth-client-registration", "--oauth-client-name", "--oauth-callback-port", "--min-expiry", "--exposure"], status: "unsupported",
+ reason: "pi's credential commands write pi's own auth files and can run an OAuth browser flow. This harness reads auth STATE through pi's ModelRuntime (src/providers.mjs) and never writes a credential, never runs a browser, and never mints a token - a model whose auth is absent is reported as such, which is what the demo shows",
+ evidence: "demo/providers.test.mjs" },
+ { capability: "model listing", names: ["--list-models", "--models"], status: "shimmed",
+ reason: "the harness answers the same question offline through src/providers.mjs, which registers pi's providers and lists what resolves with auth state beside it",
+ evidence: "demo/providers.test.mjs" },
+ { capability: "session identity flags", names: ["--session-id"], status: "shimmed",
+ reason: "pi addresses a session by a file-level id; pi-durable conversations are store-resident, so the harness names one with --conversation and takes the store's latest with --resume/--continue (demo/cli.test.mjs)",
+ evidence: "demo/cli.test.mjs" },
+ { capability: "pi's own rendering flags", names: ["--tui-mode", "--verbose", "--no-refresh"], status: "unsupported",
+ reason: "these steer pi's own print-mode renderer and package refresh; pi-durable has no renderer plane, and this harness's TUI is a separate surface on pi-tui components whose rules are shown headless (demo/tui.test.mjs)",
+ evidence: "demo/tui.test.mjs" },
+ { capability: "invocation-time resource selection", names: ["--prompt-template", "--use-theme"], status: "unsupported",
+ reason: "running a prompt template and picking a theme at invocation are pi UI verbs; the harness injects both kinds as durable pi-durable sections instead (demo/packages.test.mjs), and pi-durable's registry has no theme plane",
+ evidence: "demo/packages.test.mjs" },
 ];
 
 /** The rows, or only the rows of one status; the matrix the docs render and the demo asserts against. */
