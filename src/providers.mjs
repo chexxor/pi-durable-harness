@@ -25,7 +25,7 @@
 // That is pi's own models.json composition path, so a harness registers providers the same way pi
 // does, and never invents a provider shape.
 
-import { ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { ModelRegistry, ModelRuntime, readStoredCredential } from "@earendil-works/pi-coding-agent";
 import { createModels, fauxProvider } from "@earendil-works/pi-ai";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -45,7 +45,24 @@ export function machineProviderConfigs(agentDir = join(homedir(), ".pi", "agent"
 	const providers = config.providers ?? {};
 	// pi's own shape: { name, baseUrl, api, apiKey, models: [{id, ...}], compat }. The harness passes it
 	// through as ProviderConfigInput without renaming fields, so the composition rule stays pi's.
-	return Object.entries(providers).map(([id, value]) => ({ id, config: value }));
+	//
+	// THE CREDENTIAL HALF, in pi's own words: a provider models.json declares WITHOUT an inline `apiKey`
+	// still has credentials when pi's auth file carries an api_key for it - dist/core/provider-composer.js
+	// calls that source "stored credential" (`input.credential.key ? {auth: {apiKey: input.credential.key},
+	// source: "stored credential"}`), and pi reads that file through `readStoredCredential`, which is what
+	// is used here rather than a second reader of pi's file format. An OAuth credential is NOT inlined:
+	// pi-ai's Models plane takes an api key, and pi's login flows are not run here (the row in the matrix
+	// says so), so such a provider stays unconfigured and is reported as unconfigured beside its models.
+	return Object.entries(providers).map(([id, value]) => {
+	// pi's precedence, read from provider-composer.js: a credential in pi's auth file is the "stored
+	// credential" and answers before the models.json inline `apiKey`, which is the fallback ("configured
+	// API key"). Same order here, so the key pi sends and the key this plane sends cannot disagree.
+	const stored = readStoredCredential(id, join(agentDir, "auth.json"));
+	if (stored?.type === "api_key" && stored.key) {
+		return { id, config: { ...value, apiKey: stored.key }, credential: "stored credential" };
+	}
+	if (value?.apiKey) return { id, config: value, credential: "models_json_key" };
+	});
 }
 
 /**

@@ -155,8 +155,10 @@ export function expandRunInput(parts, text) {
  */
 export function chooseSurface(flags = {}, { isTty = false } = {}) {
 	if (flags.mode === "rpc") return "rpc";
-	// A prompt, -p, an explicit --mode, or --faux names work for this run: it prints and exits.
-	const asked = (flags.messages?.length ?? 0) > 0 || flags.print || flags.mode || flags.faux;
+	// A prompt, -p, or an explicit --mode names work for this run: it prints and exits. `--faux` does NOT
+	// force print: it names WHICH provider answers (pi-ai's scripted faux plane, so an offline run in a
+	// terminal still gets an answer), not which surface the user asked for.
+	const asked = (flags.messages?.length ?? 0) > 0 || flags.print || flags.mode;
 	if (asked) return "print";
 	return isTty ? "tui" : "print";
 }
@@ -275,7 +277,7 @@ export async function harnessInvocation(flags, { extraExtensions = [], context =
 	}
 	return {
 		...parts,
-	 intent: opened,
+		intent: opened,
 		// What this run's plane actually loaded: which pi packages answered, which pi verbs (commands/
 		// shortcuts/flags) they register, and which kinds pi's own opt-out flags skipped. RPC's get_commands
 		// and the TUI read this, so an inventory a user sees is measured from this run, not remembered.
@@ -283,12 +285,24 @@ export async function harnessInvocation(flags, { extraExtensions = [], context =
 			commands: plane.registrations?.commands ?? [],
 			shortcuts: plane.registrations?.shortcuts ?? [],
 			flags: plane.registrations?.flags ?? [],
+			// pi's resource loader answers the extension kind as a RECORD ({extensions, diagnostics}), so
+			// the list is read through that record rather than assumed to be a bare array.
+			loaderExtensions: plane.resources?.extensions?.extensions ?? [],
+			// the extension MODULES pi's loader named, loaded by pi's module loader, and the count the
+			// adapter mapped onto pi-durable's registry - three different numbers a user can compare.
+			extensionPaths: plane.extensionPaths ?? [],
+			durableExtensions: plane.durableExtensions ?? [],
 			skills: plane.resources?.skills ?? [],
 			themes: plane.resources?.themes ?? [],
 			promptTemplates: plane.resources?.prompts ?? [],
 			contextFiles: plane.contextFiles ?? [],
 			packages: plane.packages?.found ?? [],
 			themeName: plane.themeName,
+			// pi's settings this cwd answered with, and the settings keys pi-durable could not map: the run
+			// names what crossed and what did not, rather than pretending pi's file was understood whole.
+			settings: plane.settings ?? {},
+			settingsPaths: plane.settingsPaths ?? [],
+			unmappedSettings: plane.settingsUnmapped ?? [],
 			skipped: plane.skipped,
 		},
 		planeWarnings: plane.warnings,

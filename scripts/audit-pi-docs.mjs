@@ -38,6 +38,7 @@
 // member, or the symbol appears in an import list) - not when the word merely shows up in prose. Otherwise a
 // reason sentence mentioning `sendMessage` would count as exercising pi's sendMessage.
 import { readdirSync, readFileSync, globSync } from "node:fs";
+import { capabilityMatrix } from "../src/packages/matrix.mjs";
 import { join } from "node:path";
 
 const PI_PKG = join("@earendil-works", "pi-coding-agent");
@@ -393,4 +394,6 @@ if (uncovered.length) {
  for (const row of uncovered) console.log(`  ${row.doc} :: ${row.capability} :: ${row.gate}`);
  process.exit(1);
 }
-console.log(`PI-DOC AUDIT PASS: ${rows.length} capabilities enumerated by pi's ${DOCS.length} docs are each named by a matrix row (${matrix.split("\n").filter((line) => /status:/.test(line)).length} rows) or called by harness source`);
+const tally = capabilityMatrix(null).reduce((acc, row) => { acc[row.status] = (acc[row.status] ?? 0) + 1; return acc; }, {});
+const rowSummary = `${Object.values(tally).reduce((a, b) => a + b, 0)} rows (${Object.entries(tally).map(([k, v]) => `${v} ${k}`).join(" / ")})`;
+console.log(`PI-DOC AUDIT PASS: ${rows.length} capabilities enumerated by pi's ${DOCS.length} docs are each named by a matrix row (${rowSummary}) or called by harness source`);

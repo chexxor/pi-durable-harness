@@ -34,6 +34,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "nod
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { chooseSurface } from "../src/cli-intent.mjs";
+import { piSettings } from "../src/settings.mjs";
 
 const ROOT = process.cwd();
 const CLI = join(ROOT, "cli.mjs");
@@ -329,6 +330,44 @@ async function main() {
  record(commandRefusal.exit !== 0 && (commandRefusal.stdout + commandRefusal.stderr).includes("goal") && (commandRefusal.stdout + commandRefusal.stderr).includes("refused by name"),
    "a command a discovered pi package registers is refused BY NAME, not run and not dropped",
    `exit=${commandRefusal.exit} out=${(commandRefusal.stdout + commandRefusal.stderr).trim().slice(0, 140)}`);
+
+ // 10) THE PLANE the user path composes before Harness.open, read out of the run's own stderr. The
+ // counts come from THIS run - pi's packages pi found here, pi's project resources in THIS fixture cwd,
+ // pi's themes on this machine - so the line is evidence that a print run re-uses pi's package/settings/
+ // provider plane rather than opening a bare pi-durable session that happens to script a faux answer.
+ const planeRun = await runScript(CLI, ["--store", store, "--cwd", cwd, "--faux", fauxReply, "-p", "plane check"], {});
+ const planeLine = planeRun.stderr.split("\n").find((l) => l.startsWith("plane:")) ?? "";
+ const numOf = (line, key) => Number((line.match(new RegExp(`${key}=(\\d+)`)) ?? [])[1] ?? -1);
+ record(planeLine.startsWith("plane:") && numOf(planeLine, "packages") >= 1 && numOf(planeLine, "templates") >= 1 &&
+  numOf(planeLine, "skills") >= 1 && numOf(planeLine, "themes") >= 1 && numOf(planeLine, "bridged") >= 1,
+  "the print surface composes pi's plane before opening: pi's packages, THIS cwd's templates/skills and pi's themes are counted from the run",
+  `plane=${planeLine.slice(0, 210)}`);
+ // pi's per-kind opt-out flags reach that same plane and the inventory says which kind did not load
+ // (docs/cli.md names --no-extensions/--no-themes; a kind that silently did not load would be invisible).
+ const offRun = await runScript(CLI, ["--store", store, "--cwd", cwd, "--faux", fauxReply, "--no-extensions", "--no-themes", "-p", "plane check"], {});
+ const offLine = offRun.stderr.split("\n").find((l) => l.startsWith("plane:")) ?? "";
+ record(offLine.includes("skipped=extensions") && offLine.includes("themes") &&
+  numOf(offLine, "bridged") < numOf(planeLine, "bridged") && numOf(offLine, "themes") < numOf(planeLine, "themes"),
+  "--no-extensions and --no-themes stop those kinds and the run names both in its own inventory",
+  `skipped=${(offLine.match(/skipped=([^ ]+( [^ ]+)*)/) ?? [])[1] ?? "-"} bridged=${numOf(planeLine, "bridged")} -> ${numOf(offLine, "bridged")} themes=${numOf(planeLine, "themes")} -> ${numOf(offLine, "themes")}`);
+ // RPC answers pi's get_commands with pi's own `source` vocabulary over the SAME plane, and a command a
+ // pi package registers is listed with invocation "unsupported" because pi dispatches it inside pi's CLI.
+ const commandsRun = await runScript(CLI, ["--store", store, "--cwd", cwd, "--faux", fauxReply, "--mode", "rpc"],
+  { stdin: JSON.stringify({ command: "get_commands" }) + "\n" });
+ const commandRows = (commandsRun.stdout.split("\n").map((l) => { try { return JSON.parse(l); } catch { return null; } })
+  .find((r) => r?.type === "response" && r.command === "get_commands")?.data?.commands) ?? [];
+ const rowNames = commandRows.map((row) => row?.name);
+ record(commandsRun.exit === 0 && rowNames.length > 0 &&
+  commandRows.some((row) => row?.source === "prompt") && commandRows.some((row) => row?.source === "skill") &&
+  commandRows.some((row) => row?.source === "extension" && row?.invocation === "unsupported"),
+  "get_commands lists pi's prompt templates, pi's skills and pi package commands with pi's source vocabulary; a package command is listed as unsupported, not dropped",
+  `rows=${rowNames.length} sources=${[...new Set(commandRows.map((row) => row?.source))].join(",")} unsupported=${commandRows.filter((row) => row?.invocation === "unsupported").length}`);
+ const machineSettings = piSettings({ cwd });
+ const settingsNamesModel = Boolean(machineSettings?.settings?.defaultModel);
+ const settingsModelWarning = planeRun.stderr.includes("the settings model is NOT substituted silently");
+ record(!settingsNamesModel || settingsModelWarning,
+  "pi's settings name a default model, and the run says pi-ai's faux plane answers it instead - silently substituting pi's default would claim an endpoint that never spoke",
+  `settings defaultModel=${machineSettings?.settings?.defaultModel ?? "-"} warning=${settingsModelWarning}`);
 
  for (const n of notes) console.log(n);
  const failed = checks.filter((c) => !c.condition);

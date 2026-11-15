@@ -205,6 +205,15 @@ async function main() {
     ...(args?.systemPrompt && args?.appendSystem?.length ? { systemPrompt: [...(args.systemPrompt ? [args.systemPrompt] : []), ...args.appendSystem].join("\n\n") } : {}),
   };
   const parts = await harnessInvocation(flags, { extraExtensions: [] });
+  // What this run's plane actually loaded, printed once per run on stderr: the counts and names come
+  // from the plane THIS run composed (pi's settings, pi's discovered packages, the verbs they register,
+  // the kinds pi's opt-out flags skipped), so a user can see that `npm run cli` in this cwd really is
+  // reading pi's own plane rather than a bare pi-durable session. Nothing here is remembered.
+  const res = parts.resources ?? {};
+  const count = (list) => (Array.isArray(list) ? list.length : 0);
+  const namesOf = (list) => list.map((row) => row?.name ?? row?.id ?? row?.package ?? String(row)).filter(Boolean).join(",");
+  console.error(`plane: packages=${count(res.packages)} (${namesOf(res.packages)}) extensions=${count(res.loaderExtensions)} loaded=${count(res.extensionPaths)} bridged=${count(res.durableExtensions)} commands=${count(res.commands)} shortcuts=${count(res.shortcuts)} templates=${count(res.promptTemplates)} skills=${count(res.skills)} themes=${count(res.themes)} contextFiles=${count(res.contextFiles)} theme=${res.themeName ?? "pi names none"} settings=${count(res.settingsPaths)} unmappedSettings=${count(res.unmappedSettings)} skipped=${(res.skipped ?? []).length ? (res.skipped ?? []).map((s) => typeof s === "string" ? s : s?.kind).join(" ") : "none"}`);
+  for (const w of parts.planeWarnings ?? []) console.error(`warning [${w.scope}]: ${w.message}`);
   const server = claim ? serveOwner(parts, claim.lock.socket) : null;
   const mode = parts.intent.mode;
   // A session that stays open (rpc, tui, --hold) answers pi's own shutdown signals by CLEANING UP

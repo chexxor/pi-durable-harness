@@ -39,11 +39,19 @@ node cli.mjs --tui                          # the interactive TUI over the sessi
 node demo/tui-interactive.mjs --store harness.sqlite --writer-socket <the owner's socket>  # a viewer of someone else's session
 ```
 
-A plain run picks its surface by ONE rule in `src/cli-intent.mjs` (`chooseSurface`): a TTY with no prompt and
-no `--mode` is the interactive window, a piped run or a run with a prompt/`--mode` is print/JSON/RPC. That
-is why `npm run cli` in a terminal and `npm run cli -p "..."` in a script cannot drift apart, and why a
-piped `--tui` run needs `--keystroke-input` to feed pi-tui's one-keystroke-at-a-time input overlay (which
-is what a scripted session types, one character per write, with `\r` as ENTER).
+That rule is proved against a REAL terminal, not only a pipe: `demo/tty.test.mjs` allocates a pty
+(python3's stdlib `pty` module — Node has no pty primitive, and the harness code under test never sees
+python), runs `node cli.mjs` inside it with no prompt and no `--mode`, and asserts the window answered the
+typed line, painted pi's theme, committed the line exactly once on the store it owned, quit on a bare
+`quit` line, and that the SAME command with piped stdin chooses print instead. The pty is a kernel object,
+not a socket, so the demo stays inside the offline proof.
+
+Every surface also prints its own plane inventory on stderr (`plane: packages=… extensions=… loaded=…
+bridged=… templates=… skills=… themes=… theme=… skipped=…`), counted from what THIS run loaded, plus a
+`warning [model]:` line when pi's settings name a default model the run did not ask for — pi's default
+model is never substituted silently, because answering for an endpoint that never spoke would be a lie.
+The provider plane reads pi's credentials the way pi does (`readStoredCredential`, provider-composer's own
+"stored credential" precedence over models.json's inline key) and never writes one.
 
 pi's INPUT expansion is one seam too: `src/promptplane.mjs` applies pi's substitution table to a `/template`
 and pi's `<skill name= location=>` block to a `/skill:name` BEFORE the text enters the agent — the same
@@ -143,8 +151,8 @@ ledger separate from pi-durable's usage plane, and classifies endpoints (loopbac
 
 The pi package ecosystem is reused through pi's own library exports, and every capability pi has that
 pi-durable does not is **named** rather than quietly dropped: [docs/package-support.md](docs/package-support.md)
-is generated from `src/packages/matrix.mjs` by `scripts/render-matrix.mjs` — 100 rows
-(10 native / 37 shimmed / 52 unsupported), evidence per row, plus the packages actually installed on
+is generated from `src/packages/matrix.mjs` by `scripts/render-matrix.mjs` — 101 rows
+(10 native / 39 shimmed / 52 unsupported), evidence per row, plus the packages actually installed on
 this machine and what loaded from them. `src/packages/loader.mjs` uses pi's `DefaultResourceLoader`,
 `discoverAndLoadExtensions` and `loadProjectContextFiles`; `src/packages/adapter.mjs` maps pi's
 `registerTool`, `tool_call`/`tool_result`/provider/compaction handlers, skills, prompts, themes and
@@ -198,7 +206,7 @@ from the tags.
 
 Every source file carries a header naming the Durian-Pi file it was extracted from — and what was
 changed or omitted — or saying outright that there is no Durian-Pi original. `scripts/audit-provenance.mjs`
-checks that claim against the tree (`PROVENANCE PASS: 93/93 source files carry a header`), and
+checks that claim against the tree (`PROVENANCE PASS: 95/95 source files carry a header`), and
 `docs/provenance.md` is that audit's output: a table of file → source → what changed, so the extraction is
 re-derivable rather than a paragraph of prose.
 

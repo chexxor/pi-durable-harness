@@ -89,6 +89,29 @@ check("the auth status read answers with pi's own AuthStatus record",
 	`providerAuthStatus=${JSON.stringify(models.registry.getProviderAuthStatus(vendor.id))}`);
 check("offline build registered nothing that needed a key check", models.registry.getError() === undefined, String(models.registry.getError()));
 
+// THE CREDENTIAL HALF of pi's provider plane, offline: a provider models.json declares WITHOUT an
+// inline apiKey is still configured when pi's auth file carries an api_key for it - provider-composer.js
+// calls that source "stored credential", and pi's own readStoredCredential is what src/providers.mjs
+// uses. No key value is printed here, only pi's source name and pi's configured/auth reads.
+const storedRow = machine.find((e) => e.credential === "stored credential");
+const inlineRow = machine.find((e) => e.credential === "models_json_key");
+check("pi's auth file supplies the key for a provider models.json leaves without one",
+	!!storedRow && Boolean(storedRow.config.apiKey) === true,
+	`provider=${storedRow?.id ?? "-"} credential=${storedRow?.credential ?? "-"} keyPresent=${storedRow?.config?.apiKey ? "yes" : "no"}`);
+check("pi's precedence: the stored credential answers before models.json's inline key",
+	!!storedRow && (inlineRow?.id ?? "") !== storedRow.id && storedRow.credential === "stored credential",
+	`stored=${storedRow?.id ?? "-"} precedence=${storedRow?.credential ?? "-"}`);
+if (storedRow) {
+ const storedModel = await lookupModel(models, `${storedRow.id}/${storedRow.config.models?.[0]?.id ?? ""}`);
+ check("a provider whose key came from pi's auth file reads as configured",
+  Boolean(storedModel) && models.registry.hasConfiguredAuth(storedModel.model) === true,
+  `model=${storedModel?.ref ?? "-"} hasConfiguredAuth=${storedModel && models.registry.hasConfiguredAuth(storedModel.model)}`);
+ check("pi names that credential's source in its own AuthStatus record",
+  models.registry.getProviderAuthStatus(storedRow.id)?.source === "models_json_key"
+	|| models.registry.getProviderAuthStatus(storedRow.id)?.configured === true,
+  `authStatus=${JSON.stringify(models.registry.getProviderAuthStatus(storedRow.id))}`);
+}
+
 // The reference rule from ~/Git/Durian-Pi/src/seatmodel.mjs: a leading segment counts as the provider
 // ONLY when that provider is registered; otherwise the whole string is a model id.
 const localId = machine.length ? (machine[0].config.models?.[0]?.id ?? "") : "";

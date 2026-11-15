@@ -93,9 +93,19 @@ export async function agentPlane(opts = {}) {
 
 	// pi's resource plane: extensions, skills, prompt templates, themes, AGENTS.md-style context files.
 	const kindsOff = opts.kindsOff ?? [];
-	const resources = kindsOff.includes("all")
-	? { extensions: [], skills: [], prompts: [], themes: [], agentsFiles: [], systemPrompt: null, appendSystemPrompt: null, warnings: [], diagnostics: [] }
-	: await loadPiResources(cwd, agentDir, opts.additionalResourcePaths ?? {});
+	// pi's OWN opt-out vocabulary, in pi's own names (dist/core/resource-loader.d.ts
+	// `DefaultResourceLoaderOptions`: noExtensions / noSkills / noPromptTemplates / noThemes /
+	// noContextFiles). Telling the loader is not the same as filtering its answer afterwards: a kind the
+	// loader was told to skip never enters the plane, so the run's inventory reports a kind pi did not
+	// load rather than a harness-side filter hiding a kind pi did load.
+	const loaderOff = {
+		...(kindsOff.includes("extensions") || kindsOff.includes("all") ? { noExtensions: true } : {}),
+		...(kindsOff.includes("skills") || kindsOff.includes("all") ? { noSkills: true } : {}),
+		...(kindsOff.includes("prompts") || kindsOff.includes("all") ? { noPromptTemplates: true } : {}),
+		...(kindsOff.includes("themes") || kindsOff.includes("all") ? { noThemes: true } : {}),
+		...(kindsOff.includes("context") || kindsOff.includes("all") ? { noContextFiles: true } : {}),
+	};
+	const resources = await loadPiResources(cwd, agentDir, { ...(opts.additionalResourcePaths ?? {}), ...loaderOff });
 
 	// pi's extension MODULES, loaded by pi's own loader and mapped onto pi-durable's registry by the
 	// adapter. `offered`/`existingOf` come from the default tool extensions so a pi package that overrides
@@ -135,7 +145,10 @@ export async function agentPlane(opts = {}) {
 		inventory.push(...adapted.inventory);
 	}
 	if (resources.skills?.length) durableExtensions.push(skillsExtension(resources.skills));
-	const contextFiles = loadContextFiles(cwd, agentDir);
+	// pi's context files (AGENTS.md and its project variants) are one kind the loader can be told to skip,
+	// and the SAME skip reaches the system-prompt side; loading them regardless would make --no-context-files
+	// a lie.
+	const contextFiles = loaderOff.noContextFiles ? [] : loadContextFiles(cwd, agentDir);
 	if (contextFiles.length) durableExtensions.push(contextFileExtension(contextFiles, cwd));
 
 	// The AGENT record pi's settings + the CLI's --model spell for pi-durable's root conversation.
