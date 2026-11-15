@@ -1,7 +1,0 @@
-{
-  "pid": 1361422,
-  "storePath": "/home/chexxor/Git/pi-durable-harness/harness.sqlite",
-  "instanceKey": "75e29748b414145d",
-  "startedAt": "2026-11-15T15:32:24.410Z",
-  "socket": "/home/chexxor/Git/pi-durable-harness/.pi-harness/agent-75e29748b414145d.sock"
-}

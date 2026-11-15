@@ -15,3 +15,6 @@ package-lock.json.bak
 
 # pi extension state (context-budget handoffs) - not project source
 .ai-work/
+
+# store ownership locks + sockets (runtime state, one writer per store)
+.pi-harness/
