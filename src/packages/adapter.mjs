@@ -213,6 +213,12 @@ export function adaptPiExtension(extension, options = {}) {
  ? bridgeToolCall(event, handlers, inventory)
  : point.hook === "afterTool"
  ? bridgeToolResult(event, handlers, inventory)
+ : point.hook === "beforeProviderRequest"
+ ? bridgeProviderRequest(event, handlers, inventory)
+ : point.hook === "afterResponse"
+ ? bridgeProviderResponse(event, handlers, inventory)
+ : point.hook === "beforeCompact"
+ ? bridgeCompaction(event, handlers, inventory)
  : bridgePassthrough(event, handlers, inventory);
  // pi has two names for one tool call's end (`tool_result` and `tool_execution_end`), and pi-durable
  // has one hook for it: two pi events landing on one hook name must not overwrite each other, so the
@@ -290,6 +296,84 @@ function bridgeToolResult(event, handlers, inventory) {
 		}
 		return replaced;
 	};
+}
+
+/** pi's `before_provider_request` handler chain, callable from pi-durable's beforeProviderRequest hook.
+ *
+ * pi's event is {type: "before_provider_request", payload: unknown} (dist/core/extensions/types.d.ts) and
+ * the handler's result is `BeforeProviderRequestEventResult = unknown`, which pi uses as the REPLACEMENT
+ * payload; pi-durable's hook takes {model, payload} and its result replaces the body for that request
+ * only (dist/harness/types.d.ts). So the chain threads pi's payload and pi-durable's replacement slot
+ * are the same slot, and each handler's return becomes the payload the next handler sees.
+ *
+ * What is narrowed: pi-durable hands {model, payload}, so a pi handler that reads `event.payload` sees
+ * pi's payload and sees pi-durable's model too, while a handler that expects pi's request to be the
+ * whole provider body (pi builds that body itself) is reading whatever pi-ai put there at this pin.
+ */
+function bridgeProviderRequest(event, handlers, inventory) {
+ return async (subject, api, context) => {
+  let payload = subject?.payload;
+  for (const handler of handlers) {
+   const replaced = await handler({ type: event, payload }, piHandlerContext(api));
+   // pi's contract: a handler that returns nothing leaves the payload alone; one that returns a value
+   // replaces it for every later handler and for the request pi-durable sends.
+   if (replaced !== undefined && replaced !== null) payload = replaced;
+  }
+  return { payload };
+ };
+}
+
+/** pi's `after_provider_response` handler chain, callable from pi-durable's afterResponse hook.
+ *
+ * The HOOK POINTS line up (both fire once per provider response before classification), but pi's EVENT
+ * does not: pi's AfterProviderResponseEvent is {type, status: number, headers: Record<string,string>} -
+ * the provider's HTTP status and headers - and pi-durable's afterResponse hands pi-ai's AssistantMessage,
+ * which carries neither. So the bridged handler gets pi's event NAME with the fields pi-durable can
+ * honestly state, and a handler that branches on `event.status` sees nothing; that narrowing is a row.
+ */
+function bridgeProviderResponse(event, handlers, inventory) {
+ return async (message, api, context) => {
+  for (const handler of handlers) await handler({ type: event }, piHandlerContext(api));
+  return undefined;
+ };
+}
+
+/** pi's `session_before_compact` handler chain, callable from pi-durable's beforeCompact hook.
+ *
+ * pi's event is {type, preparation, branchEntries, customInstructions?, reason} where reason is
+ * "manual" | "threshold" | "overflow" - and pi-durable's CompactionReason is the SAME vocabulary
+ * (dist/harness/types.d.ts), so `reason` and `customInstructions` (its `instructions`) map 1:1, while
+ * `preparation` (pi's CompactionPreparation: messagesToSummarize, turnPrefixMessages, isSplitTurn,
+ * tokensBefore, previousSummary, fileOps, settings) and `branchEntries` (pi's session FILE entries) are
+ * pi's own planes; what this harness can state is pi-durable's own selection: its entries, its messages,
+ * and pi-durable's `firstKept`, which is pi's `firstKeptEntryId` by another name.
+ *
+ * pi's result is {cancel?: boolean, compaction?: CompactionResult{summary, firstKeptEntryId, tokensBefore,
+ * usage?, details?}}; pi-durable's is {decline: true} | {summary: string}. `cancel` becomes `decline`, and
+ * a handler's `compaction.summary` becomes pi-durable's summary - the parts of pi's CompactionResult pi-durable
+ * computes itself (firstKeptEntryId, tokensBefore, usage) are dropped, since pi-durable selects its own cut.
+ */
+function bridgeCompaction(event, handlers, inventory) {
+ return async (subject, api, context) => {
+  const piEvent = {
+   type: event,
+   reason: subject?.reason,
+   preparation: { entries: subject?.entries ?? [], messages: subject?.messages ?? [], firstKept: subject?.firstKept },
+   branchEntries: subject?.entries ?? [],
+   ...(subject?.instructions === undefined ? {} : { customInstructions: subject.instructions }),
+  };
+  let decline = false;
+  let summary = null;
+  for (const handler of handlers) {
+   const out = await handler(piEvent, piHandlerContext(api));
+   if (!out) continue;
+   if (out.cancel === true) decline = true;
+   const text = out?.compaction?.summary ?? out?.summary;
+   if (typeof text === "string" && summary === null) summary = text;
+  }
+  if (decline) return { decline: true };
+  return summary === null ? undefined : { summary };
+ };
 }
 
 function bridgePassthrough(event, handlers, inventory) {

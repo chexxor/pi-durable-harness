@@ -31,12 +31,30 @@ gathered.
 Then the four CLI surfaces, each proved by `demo/cli.test.mjs` and `demo/tui.test.mjs`:
 
 ```bash
+npm run cli                                # a plain run IN A TERMINAL: the interactive window, this directory's store
 node cli.mjs -p "hello"                    # print mode: stdout is the final answer text only
 node cli.mjs --mode json -p "hello"        # NDJSON: pi's session header + event records (docs/json.md)
 node cli.mjs --mode rpc                    # pi's protocol: {"type":"prompt",...} in, {"type":"response",...} out
 node cli.mjs --tui                          # the interactive TUI over the session THIS process owns
 node demo/tui-interactive.mjs --store harness.sqlite --writer-socket <the owner's socket>  # a viewer of someone else's session
 ```
+
+A plain run picks its surface by ONE rule in `src/cli-intent.mjs` (`chooseSurface`): a TTY with no prompt and
+no `--mode` is the interactive window, a piped run or a run with a prompt/`--mode` is print/JSON/RPC. That
+is why `npm run cli` in a terminal and `npm run cli -p "..."` in a script cannot drift apart, and why a
+piped `--tui` run needs `--keystroke-input` to feed pi-tui's one-keystroke-at-a-time input overlay (which
+is what a scripted session types, one character per write, with `\r` as ENTER).
+
+pi's INPUT expansion is one seam too: `src/promptplane.mjs` applies pi's substitution table to a `/template`
+and pi's `<skill name= location=>` block to a `/skill:name` BEFORE the text enters the agent — the same
+expansion for print, JSON, RPC and the typed TUI line (pi documents both halves in
+`docs/prompt-templates.md` / `docs/skills.md`). A command a discovered pi package registers (`/goal`) is
+**refused by name** instead: pi dispatches extension commands inside pi's CLI, which this harness does not
+run, and `get_commands` lists them with `invocation: "unsupported"`.
+
+pi's THEME palette is on the rows this TUI draws (`src/tui/theme.mjs`): pi's `theme` setting names the theme,
+pi's loader discovered its record, and the SGR codes come from that file's `concreteColors`/`fgAnsi` maps —
+a theme that lacks a token leaves those rows uncoloured rather than guessing a hue.
 
 All four open the SAME harness-invocation path (`src/cli-intent.mjs`), so the difference between them
 is what is printed, not what is run.
@@ -50,7 +68,7 @@ plane: `cycle_model`, `set_steering_mode`, `abort_retry`, `abort_bash`, `export_
 stream as pi's records from **committed entries only** — no fabricated streaming deltas. stdin is
 bidirectional (each line is answered as it arrives, never drained to EOF), and `SIGTERM`/`SIGINT` clean
 up through the ordinary path: settle what was queued, close the Harness, release the ownership lock.
-`demo/rpc.test.mjs` (50 checks) proves exactly this, with pi's `RpcClient` as the client. `node cli.mjs --store <path>` names the store;
+`demo/rpc.test.mjs` (52 checks) proves exactly this, with pi's `RpcClient` as the client. `node cli.mjs --store <path>` names the store;
 `--conversation <id>` picks a conversation the last run printed.
 
 ### Attach behavior (one writer, many readers)
@@ -91,7 +109,7 @@ measured and reported as one published tag (`v1.5.2`) behind the pin; offline, t
 Harness), `readEntries`, `listConversations`, `usage`. `src/eventfeed.mjs` adds the feed — committed
 rows plus the in-flight partial — and `src/viewmodel.mjs` decides how each becomes a line.
 
-Two choices are load-bearing, and the demos exist to keep them honest (`demo/readapi.test.mjs`, 20 checks):
+Two choices are load-bearing, and the demos exist to keep them honest (`demo/readapi.test.mjs`, 23 checks):
 
 - **A partial is a row, never an entry.** pi-durable's progress commits are deferred ("the Session
   adopts it in memory, shows it to watches and views, and resolves, but stores it later"), so an
@@ -125,13 +143,13 @@ ledger separate from pi-durable's usage plane, and classifies endpoints (loopbac
 
 The pi package ecosystem is reused through pi's own library exports, and every capability pi has that
 pi-durable does not is **named** rather than quietly dropped: [docs/package-support.md](docs/package-support.md)
-is generated from `src/packages/matrix.mjs` by `scripts/render-matrix.mjs` — 95 rows
-(10 native / 35 shimmed / 50 unsupported), evidence per row, plus the packages actually installed on
+is generated from `src/packages/matrix.mjs` by `scripts/render-matrix.mjs` — 100 rows
+(10 native / 37 shimmed / 52 unsupported), evidence per row, plus the packages actually installed on
 this machine and what loaded from them. `src/packages/loader.mjs` uses pi's `DefaultResourceLoader`,
 `discoverAndLoadExtensions` and `loadProjectContextFiles`; `src/packages/adapter.mjs` maps pi's
 `registerTool`, `tool_call`/`tool_result`/provider/compaction handlers, skills, prompts, themes and
 context files onto pi-durable's `defineExtension`/`defineTool`/`hook`/`section`/`wrapTool` — a pi extension that registers a tool name the harness already offers becomes pi-durable's `wraps` slot (pi's `wrapRegisteredTool` case), so pi's argument repair and log line run AROUND pi-durable's own tool rather than beside it: `demo/packages.test.mjs` proves the wrapped `bash` ran exactly once (a marker file gained one line) and that pi's own execute never replaced the worker.
-`demo/packages.test.mjs` (42 checks) proves the shim runs end to end on a fixture package and on the
+`demo/packages.test.mjs` (51 checks) proves the shim runs end to end on a fixture package and on the
 four real pi packages installed here. `scripts/audit-pi-docs.mjs` re-reads pi's OWN docs inside the
 pinned package — all twelve that enumerate a surface this harness claims: packages.md, extensions.md,
 rpc.md AND rpc-commands.md (pi's 34 RPC verbs), json.md (pi's event records), message-types.md (pi-ai's
@@ -167,7 +185,8 @@ from the tags.
 | `src/cli-intent.mjs`, `cli.mjs`, `src/rpc.mjs` | one intent shape, one harness-invocation path: print / json / rpc |
 | `src/ownership.mjs`, `src/attach.mjs` | store ownership (one writer) and the multiplexer attach path |
 | `src/readapi.mjs`, `src/eventfeed.mjs`, `src/viewmodel.mjs` | the single read-only read API + event feed |
-| `src/tui/` | pi-tui view: rows, sync/watch planes, frame + paint, input overlay, headless driver |
+| `src/tui/` | pi-tui view: rows, sync/watch planes, frame + paint, pi's theme palette, input overlay, headless driver |
+| `src/agentplane.mjs`, `src/promptplane.mjs` | the ONE plane every surface composes before `Harness.open` (pi's settings, providers, packages, context files) and pi's input expansion (templates, skill commands) |
 | `src/settings.mjs`, `src/providers.mjs`, `src/spend.mjs` | settings/policy resolution, model plane, money ledger |
 | `src/toolsurface.mjs`, `src/executionenv.mjs` | tool guardrails, custom tools, and the execution environment |
 | `src/packages/` | pi package discovery, pi's own loader, the extension shim, the capability matrix |
@@ -179,7 +198,7 @@ from the tags.
 
 Every source file carries a header naming the Durian-Pi file it was extracted from — and what was
 changed or omitted — or saying outright that there is no Durian-Pi original. `scripts/audit-provenance.mjs`
-checks that claim against the tree (`PROVENANCE PASS: 87/87 source files carry a header`), and
+checks that claim against the tree (`PROVENANCE PASS: 93/93 source files carry a header`), and
 `docs/provenance.md` is that audit's output: a table of file → source → what changed, so the extraction is
 re-derivable rather than a paragraph of prose.
 

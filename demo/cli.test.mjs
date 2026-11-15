@@ -30,9 +30,10 @@
 //
 // Offline: every model turn is core.mjs's faux plane (pi-ai's faux provider) - no key read, no network.
 import { spawn } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { chooseSurface } from "../src/cli-intent.mjs";
 
 const ROOT = process.cwd();
 const CLI = join(ROOT, "cli.mjs");
@@ -86,6 +87,15 @@ async function main() {
  const store = join(cwd, "h.sqlite");
  const marker = join(cwd, "marker.txt");
  const fauxReply = "the answer this CLI run commits";
+ // pi's OWN discovery has to find something for the expansion rows to mean anything, so the fixture cwd
+ // carries a project prompt template and a project skill in pi's documented layouts (.pi/prompts/*.md and
+ // .pi/skills/<name>/SKILL.md with a `description` in frontmatter, which pi's loader warns about when it
+ // is missing). Nothing here registers them: src/packages/loader.mjs asks pi's DefaultResourceLoader, and
+ // pi reports them as scope "project".
+ mkdirSync(join(cwd, ".pi", "prompts"), { recursive: true });
+ writeFileSync(join(cwd, ".pi", "prompts", "review.md"), "---\ndescription: Review staged git changes\nargument-hint: \"[focus]\"\n---\nReview the staged changes. Focus on ${1:-correctness, security, and error handling}. All args: $@ | ${@:2}\n");
+ mkdirSync(join(cwd, ".pi", "skills", "note-skill"), { recursive: true });
+ writeFileSync(join(cwd, ".pi", "skills", "note-skill", "SKILL.md"), "---\nname: note-skill\ndescription: Take notes on demand\n---\n# Note skill\nSay NOTES when asked.\n");
 
  // 1) print mode: the answer's TEXT only, from a reopened-capable invocation.
  const printRun = await runScript(CLI, ["--store", store, "--cwd", cwd, "--faux", fauxReply, "-p", "say the line"]);
@@ -251,6 +261,74 @@ async function main() {
  record(tuiRecords.some((r) => r.type === "session") && tuiRecords.some((r) => r.type === "message_end" && r.message?.role === "assistant"),
   "the reopen prints pi\'s session header and the assistant answers the TUI turn committed",
   `records=${tuiRecords.length} types=${[...new Set(tuiRecords.map((r) => r.type))].join(",")}`);
+
+ // 8) The surface a BARE invocation opens, and the keystroke vocabulary a real terminal uses.
+ //    chooseSurface is the rule cli.mjs follows, so `npm run cli` in a terminal IS the interactive
+ //    window, while a piped run that gets no prompt still errors instead of sitting open forever.
+ const tuiSurface = chooseSurface({ messages: [], mode: null, print: false, attach: false }, { isTty: true });
+ const pipedSurface = chooseSurface({ messages: [], mode: null, print: false, attach: false }, { isTty: false });
+ const printSurface = chooseSurface({ messages: ["hello"], mode: null, print: true, attach: false }, { isTty: true });
+ const rpcSurface = chooseSurface({ messages: [], mode: "rpc", print: false, attach: false }, { isTty: true });
+ record(tuiSurface === "tui" && pipedSurface === "print" && printSurface === "print" && rpcSurface === "rpc",
+   "a bare run in a terminal opens the TUI; a piped run, a prompt and --mode rpc keep their own surface",
+   `tty=${tuiSurface} piped=${pipedSurface} print=${printSurface} rpc=${rpcSurface}`);
+ // The keystroke path, proved headlessly: `--keystroke-input` makes a piped run hand over keys the way a
+ // terminal does (pi-tui\'s parseKey decides the key from one piece). Durian-Pi\'s headless rule that a
+ // bare `q` quits survives only on an EMPTY line, so a chat line can say "quiet re-run" whole, and a
+ // line of `quit` on its own ends the session without ever reaching the agent.
+ const keystrokeRun = await runScript(CLI, ["--store", store, "--cwd", cwd, "--faux", fauxReply, "--tui", "--keystroke-input"], { stdin: "quiet re-run\rquit\r" });
+ const acks = keystrokeRun.stderr.split("\n").filter((line) => line.includes("submitted: requestId="));
+ record(keystrokeRun.exit === 0 && acks.length === 1 && acks[0].includes("quiet re-run"),
+   "the keystroke stream keeps q and r as letters, submits the line whole, and a bare `quit` line ends the session",
+   `acks=${JSON.stringify(acks)} exit=${keystrokeRun.exit}`);
+ const keystrokeProof = await runScript(CLI, ["--store", store, "--cwd", cwd, "-c", "--mode", "json"]);
+ const keystrokeRecords = keystrokeProof.stdout.split("\n").filter((l) => l.trim()).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+ const keystrokeUser = keystrokeRecords.filter((r) => r.type === "message_end" && r.message?.role === "user" && JSON.stringify(r.message).includes("quiet re-run"));
+ const keystrokeQuit = keystrokeRecords.filter((r) => r.type === "message_end" && r.message?.role === "user" && JSON.stringify(r.message.content ?? "").includes("\"quit\""));
+ record(keystrokeUser.length === 1,
+   "the keystroke line is committed once on this store, and the `quit` line never reached the agent",
+   `user=${keystrokeUser.length} quit=${keystrokeQuit.length}`);
+
+
+ // 9) pi's INPUT expansion plane, end to end: a `/template` and a `/skill:name` expand BEFORE the text
+ //    enters the agent (docs/prompt-templates.md and docs/skills.md name that boundary), over the plane
+ //    pi discovered for this cwd, and a command a loaded pi package registers is refused by name instead
+ //    of running pi's command dispatch (docs/rpc-commands.md: "Extension commands are not allowed").
+ const templateRun = await runScript(CLI, ["--store", store, "--cwd", cwd, "--faux", fauxReply, "-p", '/review "API compatibility"'], {});
+ const templateProof = await runScript(CLI, ["--store", store, "--cwd", cwd, "-c", "--mode", "json"]);
+ const templateRecords = templateProof.stdout.split("\n").filter((l) => l.trim()).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+ const expandedTemplate = templateRecords.filter((r) => r.type === "message_end" && r.message?.role === "user" && JSON.stringify(r.message).includes("Focus on API compatibility"));
+ const literalTemplate = templateRecords.filter((r) => r.type === "message_end" && r.message?.role === "user" && JSON.stringify(r.message).includes("${1:-"));
+ record(expandedTemplate.length === 1 && literalTemplate.length === 0,
+   "/review \"API compatibility\" became pi's template text with pi's substitution table applied (the placeholder is gone, and the quoted argument is ONE argument)",
+   `expanded=${expandedTemplate.length} literal=${literalTemplate.length} stderr=${templateRun.stderr.slice(0, 90)}`);
+ const defaultRun = await runScript(CLI, ["--store", store, "--cwd", cwd, "--faux", fauxReply, "-p", "/review"], {});
+ const defaultProof = await runScript(CLI, ["--store", store, "--cwd", cwd, "-c", "--mode", "json"]);
+ const defaultRecords = defaultProof.stdout.split("\n").filter((l) => l.trim()).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+ const defaultUser = defaultRecords.filter((r) => r.type === "message_end" && r.message?.role === "user" && JSON.stringify(r.message).includes("correctness, security, and error handling"));
+ record(defaultUser.length === 1,
+   "a bare /review answers the template's `${1:-default}` clause, which is pi's documented substitution rather than an empty argument",
+   `defaulted=${defaultUser.length} of user rows=${defaultRecords.filter((r) => r.type === "message_end" && r.message?.role === "user").length}`);
+ const skillRun = await runScript(CLI, ["--store", store, "--cwd", cwd, "--faux", fauxReply, "-c", "-p", "/skill:note-skill now"], {});
+ const skillProof = await runScript(CLI, ["--store", store, "--cwd", cwd, "-c", "--mode", "json"]);
+ const skillRecords = skillProof.stdout.split("\n").filter((l) => l.trim()).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+ const skillUser = skillRecords.filter((r) => r.type === "message_end" && r.message?.role === "user" && JSON.stringify(r.message).includes("<skill name=") && JSON.stringify(r.message).includes("note-skill") && JSON.stringify(r.message).includes("References are relative to") && JSON.stringify(r.message).includes("Say NOTES when asked") && JSON.stringify(r.message).includes("now"));
+ record(skillUser.length === 1,
+   "/skill:note-skill became pi's own <skill name= location=> block over pi's stripFrontmatter body with the arguments appended (dist/core/agent-session.js `_expandSkillCommand`, docs/skills.md: 'Arguments after /skill:name are appended to the loaded instructions as a user request')",
+   `skill rows=${skillUser.length} stderr=${skillRun.stderr.slice(0, 90)}`);
+ const tuiTheme = await runScript(CLI, ["--store", store, "--cwd", cwd, "--faux", fauxReply, "--tui", "--width", "50", "--height", "10", "--keystroke-input"],
+   { stdin: "themed line\rquit\r" });
+ // pi chose its palette from pi's own two places: the `theme` SETTING (pi's settings file) and the theme
+ // RECORD pi's loader discovered for the run - and the codes it painted are pi's rgb triple, not a hue
+ // typed in this file (docs/themes.md names the setting; src/tui/theme.mjs reads the record).
+ record(tuiTheme.stderr.includes("theme: starry-night") && tuiTheme.stderr.includes("rows coloured=") && !tuiTheme.stderr.includes("rows coloured=0") &&
+   tuiTheme.stderr.includes("palette=38;2;"),
+   "the interactive window colours its rows with pi's discovered theme rather than its own palette",
+   `stderr=${tuiTheme.stderr.trim().split("\n").slice(-3).join(" | ").slice(0, 190)}`);
+ const commandRefusal = await runScript(CLI, ["--store", store, "--cwd", cwd, "--faux", fauxReply, "-c", "-p", "/goal start"], {});
+ record(commandRefusal.exit !== 0 && (commandRefusal.stdout + commandRefusal.stderr).includes("goal") && (commandRefusal.stdout + commandRefusal.stderr).includes("refused by name"),
+   "a command a discovered pi package registers is refused BY NAME, not run and not dropped",
+   `exit=${commandRefusal.exit} out=${(commandRefusal.stdout + commandRefusal.stderr).trim().slice(0, 140)}`);
 
  for (const n of notes) console.log(n);
  const failed = checks.filter((c) => !c.condition);

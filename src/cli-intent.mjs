@@ -41,6 +41,8 @@ import { join, resolve } from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { openStore, listConversations } from "./readapi.mjs";
 import { openHarness, scriptTurn } from "./core.mjs";
+import { agentPlane } from "./agentplane.mjs";
+import { expandInput } from "./promptplane.mjs";
 import { commandNames, handle } from "./rpc.mjs";
 
 /**
@@ -72,8 +74,10 @@ export function intent(flags, { cwd = process.cwd() } = {}) {
 		// (Agent.thinkingLevel, dist/harness/types.d.ts AgentState); pi-ai's ModelThinkingLevel is the
 		// vocabulary, and pi-durable rejects a level outside it rather than this file guessing one.
 		...(flags?.thinking ? { thinking: flags.thinking } : { thinking: null }),
-		tools: flags?.tools ?? null,
 		excludeTools: flags?.excludeTools ?? [],
+		// pi's per-resource opt-outs (--no-extensions/--no-skills/--no-themes/
+		// --no-prompt-templates/--no-context-files): which kinds of pi package this run will not load.
+		kindsOff: flags?.noKinds ?? [],
 		faux: flags?.faux ?? null,
 		cwd: at,
 	};
@@ -86,7 +90,7 @@ export function intent(flags, { cwd = process.cwd() } = {}) {
  * them, so a fixture cannot smuggle a harness knob through a flag the real CLI does not have.
  * @temp: a value flag with nothing after it is an error, not `undefined`. */
 export function parseFlags(argv, { fixture = [] } = {}) {
-	const a = { messages: [], mode: null, store: null, conversation: null, faux: null, model: null, provider: null, systemPrompt: null, thinking: null, tools: null, excludeTools: [] };
+	const a = { messages: [], noKinds: [], mode: null, store: null, conversation: null, faux: null, model: null, provider: null, systemPrompt: null, thinking: null, tools: null, excludeTools: [] };
 	for (let i = 0; i < argv.length; i++) {
 		const t = argv[i];
 		if (t === "-p" || t === "--print") a.print = true;
@@ -107,14 +111,54 @@ export function parseFlags(argv, { fixture = [] } = {}) {
 			else if (name === "tools") { a.tools = value.split(","); i++; }
 			else if (name === "exclude-tools") { a.excludeTools = value.split(","); i++; }
 			else if (name === "faux") { a.faux = value; i++; }
+			// pi's per-resource opt-outs are booleans: which kind of pi package this run will not load.
+			else if (name === "no-extensions") a.noKinds.push("extensions");
+			else if (name === "no-skills") a.noKinds.push("skills");
+			else if (name === "no-themes") a.noKinds.push("themes");
+			else if (name === "no-prompt-templates") a.noKinds.push("prompts");
+			else if (name === "no-context-files") a.noKinds.push("context");
 			// `--cwd` is fixture-only: the real CLI answers in the directory it is run in, and a fixture
 			// has to run in a directory of its own.
 			else if (name === "cwd") { a.cwd = value; i++; }
-			else throw new Error(`unknown flag ${t}; the flags are --store, --mode <text|json|rpc>, -p/--print, -c/--continue, -r/--resume, --session <id>, --no-session, --model, --provider, --system-prompt, --tools, --exclude-tools, --faux`);
+			else throw new Error(`unknown flag ${t}; the flags are --store, --mode <text|json|rpc>, -p/--print, -c/--continue, -r/--resume, --session <id>, --no-session, --model, --provider, --system-prompt, --thinking <level>, --tools, --exclude-tools, --faux, --no-extensions/--no-skills/--no-themes/--no-prompt-templates/--no-context-files`);
 		} else a.messages.push(t);
 	}
 	if (a.mode && !["text", "json", "rpc"].includes(a.mode)) throw new Error(`--mode must be text, json, or rpc; got ${a.mode}`);
 	return a;
+}
+
+/**
+ * The ONE input seam: text a user typed, through pi's expansion, to what the agent receives.
+ *
+ * print, JSON, TUI and RPC all answer through here (RPC's own path calls src/promptplane.mjs inside
+ * src/rpc.mjs, which owns that path's queueing), so a `/template` and a `/skill:name` mean the same
+ * thing wherever the user typed them. The plane is pi's own discovery: the templates and skills
+ * src/packages/loader.mjs found for this cwd, and the commands the loaded pi packages register.
+ */
+export function expandRunInput(parts, text) {
+	return expandInput(text, {
+		templates: parts?.resources?.promptTemplates ?? [],
+		skills: parts?.resources?.skills ?? [],
+		commands: parts?.resources?.commands ?? [],
+	});
+}
+
+/**
+ * Which SURFACE a bare invocation opens, decided once so the CLI cannot both print and sit idle.
+ *
+ * pi's rule (docs/cli.md inside the pinned package) is the shape this follows: `-p`/a prompt prints and
+ * exits, `--mode rpc` is the pipe protocol, and a plain run in a terminal is the interactive session.
+ * The same words here: a TTY that was handed no prompt, no explicit mode and no `-p` gets the
+ * interactive TUI (this process owns the store, so the typed line goes to Conversation.submit on that
+ * one mutation line); anything else keeps print mode, because a scripted run that gets no prompt has
+ * nothing to do and an interactive window in a pipe would hang there.
+ */
+export function chooseSurface(flags = {}, { isTty = false } = {}) {
+	if (flags.mode === "rpc") return "rpc";
+	// A prompt, -p, an explicit --mode, or --faux names work for this run: it prints and exits.
+	const asked = (flags.messages?.length ?? 0) > 0 || flags.print || flags.mode || flags.faux;
+	if (asked) return "print";
+	return isTty ? "tui" : "print";
 }
 
 /**
@@ -159,14 +203,42 @@ export async function harnessInvocation(flags, { extraExtensions = [], context =
 	// Reopen is measured, not remembered: a second invocation in one directory reopens the store the
 	// first one committed, and that is what `-c`/`--resume` are for.
 	const reopened = prior.length > 0;
+	// pi's WHOLE package plane is composed here, once, before the open: pi's settings.json (global +
+	// project), pi's provider plane (pi's machine configs + pi-ai's faux provider for offline turns),
+	// and pi's packages (extensions, skills, prompt templates, themes, AGENTS.md context files) mapped
+	// onto pi-durable extensions by src/packages/adapter.mjs. Every surface - print, JSON, RPC, TUI -
+	// therefore runs on the SAME plane, and no mode can quietly open a harness that never saw pi's
+	// packages. An explicit --model always names the model; pi's settings default applies only when the
+	// caller says a real model may answer (opts.realModel), which is what keeps an offline run from
+	// reaching pi's provider endpoints behind the harness's back.
+	const plane = await agentPlane({
+		cwd: opened.cwd,
+		...(opened.model ? { modelRef: opened.model, realModel: true } : {}),
+		...(opened.provider ? { defaultProvider: opened.provider } : {}),
+		kindsOff: opened.kindsOff,
+	});
 	const parts = await openHarness({
 		cwd: opened.cwd,
 		// `--no-session` is pi's own verb: no store file, so there is nothing to reopen and no line to
 		// resume. pi-durable's in-memory Session is core.mjs's other opener.
 		storePath: opened.noSession ? null : opened.store,
+		// pi's settings.json (global + project), mapped onto pi-durable's names by src/settings.mjs -
+		// including THIS project's compaction.enabled: false, which is what keeps pi's auto-compaction
+		// out of a run here instead of leaving it to pi's defaults.
+		settings: plane.settings,
+		// pi's provider plane with pi-ai's faux provider armed beside it, so an offline run resolves
+		// real refs but answers from the script rather than from a billed endpoint.
+		models: plane.models,
+			// the faux provider this plane armed beside pi's providers, so the surface below
+			// scripts an offline turn against the SAME provider the plane holds.
+			faux: plane.modelFaux,
 		agent: {
 			// The offline plane is core.mjs's: pi-ai's faux provider, no credentials, no network.
-			model: opened.model ? { provider: opened.provider ?? "faux", modelId: opened.model } : { provider: "faux", modelId: "faux-1" },
+			// An explicit --model resolves through pi's provider plane by the prefix rule (src/providers.mjs);
+			// otherwise the plane already decided the model (pi's settings default, or pi-ai's faux plane).
+			model: opened.model
+				? plane.modelRef ?? { provider: opened.provider ?? "faux", modelId: opened.model }
+				: plane.agent?.model ?? { provider: "faux", modelId: "faux-1" },
 			...(opened.instructions ? { instructions: opened.instructions } : {}),
 		// pi-durable's Agent.thinkingLevel: pi's --thinking verb, no re-implementation of pi-ai's
 		// ThinkingLevel schema here.
@@ -174,7 +246,13 @@ export async function harnessInvocation(flags, { extraExtensions = [], context =
 		},
 		...(opened.tools ? { toolNames: opened.tools } : {}),
 		...(opened.excludeTools.length ? { excludeTools: opened.excludeTools } : {}),
-		...(extraExtensions.length ? { extraExtensions } : {}),
+		// pi's package extensions install into the SAME registry as the harness's tools and the
+		// tool surface's extras, in that order: pi-durable's registry replaces by extension name, so the
+		// pi packages come last and land in pi-durable's wrap slot for a name the harness already offers.
+		extraExtensions: [
+			...extraExtensions,
+			...(plane.durableExtensions ?? []),
+		],
 	});
 	// The VERB, applied to the open the ONE path just made.
 	// @temp: resume() before any submit, so recovery of a run a dead process left is decided before
@@ -198,6 +276,22 @@ export async function harnessInvocation(flags, { extraExtensions = [], context =
 	return {
 		...parts,
 	 intent: opened,
+		// What this run's plane actually loaded: which pi packages answered, which pi verbs (commands/
+		// shortcuts/flags) they register, and which kinds pi's own opt-out flags skipped. RPC's get_commands
+		// and the TUI read this, so an inventory a user sees is measured from this run, not remembered.
+		resources: {
+			commands: plane.registrations?.commands ?? [],
+			shortcuts: plane.registrations?.shortcuts ?? [],
+			flags: plane.registrations?.flags ?? [],
+			skills: plane.resources?.skills ?? [],
+			themes: plane.resources?.themes ?? [],
+			promptTemplates: plane.resources?.prompts ?? [],
+			contextFiles: plane.contextFiles ?? [],
+			packages: plane.packages?.found ?? [],
+			themeName: plane.themeName,
+			skipped: plane.skipped,
+		},
+		planeWarnings: plane.warnings,
 	 reopened,
 	 priorLines: prior,
 	 commands: commandNames(),

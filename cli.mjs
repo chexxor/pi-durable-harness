@@ -19,7 +19,7 @@ import { claimWriter, releaseWriter, readOwner } from "./src/ownership.mjs";
 import { serveOwner, request } from "./src/attach.mjs";
 import { handle, commandNames } from "./src/rpc.mjs";
 import { scriptTurn, transcript } from "./src/core.mjs";
-import { harnessInvocation, intent, finalAnswerText, rpcLine, settleInvocation } from "./src/cli-intent.mjs";
+import { harnessInvocation, intent, finalAnswerText, rpcLine, settleInvocation, chooseSurface, expandRunInput } from "./src/cli-intent.mjs";
 // pi's JSON event records (docs/json.md inside the pinned package) are what --mode json and --mode
 // rpc print, built by src/pievents.mjs from pi-durable's committed entries.
 import { piEventsOf, sessionHeader } from "./src/pievents.mjs";
@@ -27,7 +27,8 @@ import { piEventsOf, sessionHeader } from "./src/pievents.mjs";
 // for a store another process owns is demo/tui-interactive.mjs.
 import { openWriterView, writerSubmit } from "./src/tui/writer.mjs";
 import { createUiDriver } from "./src/tui/driver.mjs";
-import { renderFrame, rowComponent } from "./src/tui/frame.mjs";
+import { applyThemeToRows } from "./src/tui/theme.mjs";
+import { renderFrame, rowComponent, INPUT_MARK } from "./src/tui/frame.mjs";
 import { ProcessTerminal, TuiMainScreen } from "@earendil-works/pi-tui";
 
 const HELP = `pi-durable-harness [options] [--] [prompt words...]
@@ -50,12 +51,20 @@ const HELP = `pi-durable-harness [options] [--] [prompt words...]
   --faux <text>           offline scripted reply (demo/CI; no keys, no network)
   --attach                force attach to a running owner as a reader
   --tui                   the interactive TUI over this session (this process owns the store)
+  --keystroke-input       feed the TUI keystroke chunks instead of whole lines (what a terminal sends)
   --hold <ms>             stay open after a print turn (so others can attach)
+  --width <cols>          TUI width (default: the terminal's)
+  --height <rows>         TUI height (default: the terminal's)
+
+A plain run IN A TERMINAL (no prompt, no --mode) opens the interactive TUI over this directory's store;
+this process owns that store, so a typed line goes to Conversation.submit on the store's ONE mutation
+line. ESC or Ctrl+C quits; typing q or quit on a line of its own does the same. Piped in (no TTY) a run
+needs a prompt - an interactive window in a pipe would sit open forever.
   --version               the pinned release this harness resolves, and exit
   --help                  this text`;
 
 export function parseArgs(argv) {
-  const a = { appendSystem: [], messages: [] };
+  const a = { appendSystem: [], messages: [], noKinds: [] };
   for (let i = 0; i < argv.length; i++) {
     const t = argv[i];
     if (t === "--version") a.version = true;
@@ -66,6 +75,20 @@ export function parseArgs(argv) {
     else if (t === "--hold") { a.hold = Number(argv[i + 1]); i++; }
     else if (t === "--faux") { a.faux = argv[i + 1]; i++; }
     else if (t === "--no-tools") a.noTools = true;
+    // pi's per-resource opt-outs: one flag per kind of pi package it will not load. The harness honours
+    // them by NOT loading that kind and saying so in the run's own inventory, which is why they are
+    // parsed flags rather than a refusal.
+    else if (t === "--no-extensions") a.noKinds.push("extensions");
+    else if (t === "--no-skills") a.noKinds.push("skills");
+    else if (t === "--no-themes") a.noKinds.push("themes");
+    else if (t === "--no-prompt-templates") a.noKinds.push("prompts");
+    else if (t === "--no-context-files") a.noKinds.push("context");
+    // A terminal delivers keystroke chunks; `--keystroke-input` lets a piped run speak the SAME way
+    // (one key per piece, ENTER as `\r`), which is how the offline demo proves the interactive path.
+    else if (t === "--keystroke-input") a.keystrokeInput = true;
+    else if (t === "--width") { a.width = Number(argv[i + 1]); i++; }
+    else if (t === "--height") { a.height = Number(argv[i + 1]); i++; }
+    else if (t === "--attach") a.attach = true;
     else if (t === "--attach") a.attach = true;
     else if (t === "--tui") a.tui = true;
     else if (t.startsWith("--")) {
@@ -156,6 +179,16 @@ async function main() {
   }
   if (args.attach) throw new Error(`--attach needs a live owner; ${owned.reason ?? "the store is not claimed"}`);
 
+  // Which surface this run is: a plain run in a terminal is the interactive window, a piped run or an
+  // explicit prompt/mode is print/JSON, `--mode rpc` is the pipe protocol (src/cli-intent.mjs' rule, so
+  // `npm run cli` in a terminal and `npm run cli -p "..."` in a script cannot drift apart).
+  const surface = chooseSurface(args, { isTty: process.stdin.isTTY === true });
+  const tui = args.tui || surface === "tui";
+  // A real terminal delivers keystroke chunks; `--keystroke-input` makes a piped run deliver them the
+  // same way, so the offline demo exercises the interactive path rather than the scripted line path.
+  const interactive = tui && (process.stdin.isTTY === true || args.keystrokeInput === true);
+  const argsFor = { ...args, ...(tui ? { tui: true } : {}) };
+
   // Claim before opening: the process that opens the store is the process that owns the mutation line.
   const claim = args.noSession ? null : claimWriter(store);
 
@@ -163,7 +196,7 @@ async function main() {
   // pi-durable's recovery is inside that path (resume() when the store already has a committed line),
   // which is why print, json, rpc, `-c`/`-r`, and `--session <id>` cannot open differently.
   const flags = {
-    ...args,
+    ...argsFor,
     cwd,
     // --no-tools chooses an EMPTY offered set; pi-durable then settles any call as `tool_unavailable`,
     // which is pi's --no-tools behaviour with pi-durable's refusal instead of a hidden tool.
@@ -181,7 +214,10 @@ async function main() {
   // The session's line reader is made before the surface below, so the signal handler can end the
   // session rather than kill the process - Node's default SIGTERM handling skips the finally block,
   // which would leave this process' lock claiming the store forever.
-  const reader = (mode === "rpc" || args.tui) ? stdinReader() : null;
+  // ONE reader per process, chosen by the surface: a TUI in a terminal gets keystrokes, a scripted
+  // TUI gets whole lines, and RPC gets pi's JSONL records. Registering two stdin listeners would
+  // split one stream into two half-fed buffers, which is why the choice happens here.
+  const reader = tui ? (interactive ? keystrokeReader() : stdinReader()) : mode === "rpc" ? stdinReader() : null;
   const onSignal = (signal) => {
     if (signalled) return;
     signalled = signal;
@@ -191,8 +227,13 @@ async function main() {
   process.on("SIGTERM", () => onSignal("SIGTERM"));
   process.on("SIGINT", () => onSignal("SIGINT"));
   try {
-    if (args.tui) {
-      await writerTui(parts, args, reader);
+    if (tui) {
+      const tuiRun = await writerTui(parts, argsFor, reader, { keystrokes: interactive });
+      // Naming the palette pi supplied, so a demo can assert pi's colours reached the rows above rather
+      // than trusting the frame look right: the token NAMES (accent, borderMuted) are pi's theme file's.
+      const tokenText = (tuiRun?.theme?.tokens ? Object.entries(tuiRun.theme.tokens).map(([side, token]) => `${side}=${token}`).join(" ") : "none");
+      const codeText = (tuiRun?.theme?.codes ?? []).join(" ");
+      console.error(`theme: ${tuiRun?.theme?.name ?? (parts.resources?.themeName ? `pi names ${parts.resources.themeName}, which pi did not discover for this cwd` : "pi's settings name no theme")} rows coloured=${tuiRun?.theme?.coloured ?? 0} tokens=${tokenText} palette=${codeText}`);
     } else if (mode === "rpc") {
       // pi's RPC mode is a bidirectional pipe protocol: no session header, one record per line in,
       // a response record (plus the run's session-event records) out. The `ready` record is this
@@ -210,12 +251,22 @@ async function main() {
       const text = parts.intent.prompt;
       if (!text && !args.continue && !args.resume && !args.conversation) throw new Error("print mode needs a prompt; run with --help");
       if (text) {
+        // pi expands a prompt template and a skill command BEFORE the input enters the agent
+        // (docs/prompt-templates.md: "Pi expands the template before the resulting text enters the
+        // agent"; docs/rpc-commands.md names the same boundary for the queued verbs), through the ONE
+        // seam src/cli-intent.mjs exposes - the same expansion print, JSON, TUI and RPC share, over the
+        // templates and skills pi discovered for this cwd.
+        const expanded = expandRunInput(parts, text);
+        if (expanded.expansion?.refused) throw new Error(expanded.expansion.refused);
+        if (expanded.expansion === "template" || expanded.expansion === "skill")
+          console.error(`expanded pi's ${expanded.expansion} (${text.split(/\s+/)[0].slice(1)}) into the submitted input`);
+        const inputText = expanded.text;
         // The offline plane is armed here because the print/json surfaces queue their own input; RPC
         // arming lives in src/cli-intent.mjs' rpcLine, which owns that path's prompts.
         if (parts.intent.faux) scriptTurn(parts.faux, [parts.intent.faux]);
         // The queued input is recorded on the shared path's settlement list, so `settleInvocation` waits
         // for an answer rather than leaving the input parked in pi.inbox for the next process to replay.
-        const queued = await parts.conversation.submit({ type: "input", content: text, requestId: `cli-${process.pid}` }, parts.context);
+        const queued = await parts.conversation.submit({ type: "input", content: inputText, requestId: `cli-${process.pid}` }, parts.context);
         parts.settlements.push(queued.id);
       }
       await settleInvocation(parts);
@@ -251,6 +302,42 @@ async function main() {
  * waits for its response must GET the response, and draining stdin to EOF first would deadlock
  * exactly the client pi's own RpcClient is.
  */
+/** One keystroke chunk at a time from a real terminal, for the interactive TUI.
+ *
+ * WHY NOT the line reader: a real terminal in raw mode hands over single keystrokes and whole escape
+ * sequences (`\r` for ENTER, `\x1b[A` for an arrow), none of which end in the LF the line reader splits
+ * on. pi-tui's parseKey decides the key from the chunk, so this reader only moves chunks.
+ */
+function keystrokeReader() {
+  const state = { queue: [], ended: false, wake: null };
+  const notify = () => {
+    const wake = state.wake;
+    state.wake = null;
+    wake?.();
+  };
+  process.stdin.on("data", (chunk) => {
+    const text = String(chunk ?? "");
+    if (!text) return;
+    state.queue.push(text);
+    notify();
+  });
+  process.stdin.on("end", () => { state.ended = true; notify(); });
+  process.stdin.on("close", () => { state.ended = true; notify(); });
+  return {
+    next: async () => {
+      while (true) {
+        if (state.queue.length) return { done: false, value: state.queue.shift() };
+        if (state.ended) return { done: true };
+        await new Promise((resolve) => { state.wake = resolve; });
+      }
+    },
+    // Leaving on a signal or a quit: the loop returns through its ordinary path, so the caller releases
+    // the store and closes the Harness.
+    stop: () => { state.ended = true; notify(); },
+  };
+}
+
+
 function stdinReader() {
   const state = { buffer: "", lines: [], ended: process.stdin.isTTY ? true : false, wake: null };
   if (process.stdin.isTTY) {
@@ -292,7 +379,17 @@ function stdinReader() {
  * view planes, and a typed line that goes to Conversation.submit on the store's ONE mutation line
  * (src/tui/writer.mjs' rule: the writer is the owner, so there is no socket hand-off here).
  */
-async function writerTui(parts, args, reader) {
+/** Which pi theme this run should colour its rows with: pi's `theme` setting names it, and pi's loader
+ * discovered the record for this cwd. A name pi's settings carry but pi did not discover (or a kind
+ * --no-themes switched off) is reported rather than guessed at, which is why the answer says so.
+ */
+function piThemeOf(parts) {
+  const name = parts.resources?.themeName;
+  if (!name) return null;
+  return (parts.resources?.themes ?? []).find((theme) => theme?.name === name) ?? null;
+}
+
+async function writerTui(parts, args, reader, { keystrokes = false } = {}) {
   const view = await openWriterView(parts, { conversationId: parts.conversation.id, context: parts.context });
   const size = () => ({ columns: process.stdout.columns ?? args.width ?? 80, rows: process.stdout.rows ?? args.height ?? 24 });
   // The wiring order is pi's own, read from the pinned dist: dist/cli/startup-ui.js builds
@@ -302,11 +399,17 @@ async function writerTui(parts, args, reader) {
   const screen = new TuiMainScreen(new ProcessTerminal(), false, undefined);
   const typed = [];
   const painted = [];
+  let themedReport = null;
   const paintFrame = async () => {
     const at = size();
     const frame = await view.paint({ width: at.columns, height: at.rows });
     screen.clear();
-    for (const row of frame.rows) screen.addChild(rowComponent(row, { width: at.columns }).component);
+    // pi's palette on the rows this TUI draws: docs/themes.md says a theme "control[s] the colors Pi uses
+    // in interactive mode", pi's settings name the selected theme, and pi's own loader discovered its record
+    // for this cwd, so the colours come from pi's theme file and not from a palette typed here.
+    const themed = applyThemeToRows(frame.rows, piThemeOf(parts), { inputMark: INPUT_MARK });
+		themedReport = { name: themed.theme, coloured: themed.coloured, tokens: themed.tokens, codes: themed.codes };
+    for (const row of themed.lines) screen.addChild(rowComponent(row, { width: at.columns }).component);
     screen.invalidate();
     screen.requestRender();
     painted.push(frame);
@@ -317,33 +420,61 @@ async function writerTui(parts, args, reader) {
     readState: async () => await view.read(),
     paint: async (state, { width, height }) => await paintFrame(),
     pollMs: 700,
+    // quitOnBareQ is off for a real terminal: a chat line has to be able to START with the letter q,
+    // so ESC and Ctrl+C are the quits there and `q`/`quit` quit only as a whole submitted line. The
+    // scripted (piped) surface keeps Durian-Pi's headless rule, which is what demo/tui.test.mjs and
+      // demo/cli.test.mjs assert.
+    quitOnBareQ: !keystrokes,
     // The driver's onInput is synchronous, so the line is queued and awaited in the loop below:
     // a submission is durable work and only the loop can await it in order.
     onInput: (line) => { typed.push(line); },
     onExit: () => {},
   });
+  // A submitted line of `q`/`quit`/`exit` is the user asking to leave: it is NOT sent to the agent, and
+  // the driver's own quit path is taken, so the lock is released and the Harness closed the same way ESC
+  // or Ctrl+C leaves the session.
+  const quitWords = ["q", "quit", "exit"];
   const flushTyped = async () => {
     while (typed.length) {
       const line = typed.shift();
-      const ack = await writerSubmit(parts, line, { context: parts.context });
+      if (keystrokes && quitWords.includes(line.trim().toLowerCase())) {
+        typed.length = 0;
+        return { quit: "quit" };
+      }
+      // A typed TUI line goes through the SAME expansion seam as print and RPC: pi expands a template and
+      // a skill command before the input enters the agent, so `/review concurrency` means one thing no
+      // matter where the user typed it.
+      const expandedLine = expandRunInput(parts, line);
+      if (expandedLine.expansion?.refused) {
+        console.error(`refused: ${expandedLine.expansion.refused}`);
+        continue;
+      }
+      const ack = await writerSubmit(parts, expandedLine.text, { context: parts.context });
       // The acknowledgement goes to stderr so a scripted session reading stdout records stays parseable.
       console.error(`submitted: requestId=${ack.requestId} submissionId=${ack.submissionId} status=${ack.status}`);
     }
+    return { quit: null };
   };
-  await paintFrame();
   if (process.stdin.isTTY) process.stdin.setRawMode(true);
+  await paintFrame();
   let quit = null;
   while (true) {
     const item = await reader.next();
     if (item.done) break;
-    // a scripted session (no TTY) sends whole lines; pi-tui's overlay takes one keystroke at a time and
-    // submits on the ENTER key, so the line is split into characters and its terminator becomes ENTER.
+    // A real terminal hands pi-tui one keystroke chunk at a time (an escape sequence arrives as ONE
+    // chunk, which is why pi-tui's parseKey, not a character loop, decides the key); a scripted session
+    // sends whole lines, so the line is split into characters and its terminator becomes ENTER.
+    const chunks = keystrokes ? [item.value] : [...`${item.value}${item.value.endsWith("\n") ? "" : "\n"}`];
     let answer = { quit: null };
-    for (const ch of `${item.value}${item.value.endsWith("\n") ? "" : "\n"}`) {
-      answer = driver.noteData(ch);
+    for (const chunk of chunks) {
+      answer = driver.noteData(chunk);
       if (answer.quit) break;
+      // A typed keystroke repaints the overlay: the user sees the word they are typing, and the driver's
+      // "poll, not freelock" rule still holds because input is what marks the frame dirty.
+      if (keystrokes) await driver.tickIfDirty();
     }
-    await flushTyped();
+    const sent = await flushTyped();
+    if (keystrokes && sent?.quit) { quit = sent.quit; break; }
     if (answer.quit) { quit = answer.quit; break; }
     await driver.poll(Date.now());
   }
@@ -353,7 +484,7 @@ async function writerTui(parts, args, reader) {
   screen.requestRender();
   screen.stop();
   if (process.stdin.isTTY) process.stdin.setRawMode(false);
-  return { painted: painted.length, quit };
+  return { painted: painted.length, quit, theme: themedReport };
 }
 
 main().catch((err) => {

@@ -154,9 +154,32 @@ const afterBash = (await client.getState()).messageCount;
 const bashMessages = await client.getMessages();
 check("included bash output became transcript INPUT (pi's 'next prompt' rule), not an instant reply", afterBash > beforeBash && bashMessages.some((m) => m.role === "user" && JSON.stringify(m.content).includes("Ran `echo rpc-bash`")), JSON.stringify({ before: beforeBash, after: afterBash, roles: bashMessages.map((m) => m.role) }));
 
-// 6. get_commands: pi's RpcSlashCommand list, from this harness's package loader.
+// 6. get_commands: pi's RpcSlashCommand list, built from what pi's OWN loader discovered for this cwd.
+//   src/agentplane.mjs inventories the commands, shortcuts and flags each loaded pi package registers, and
+//   the rows carry pi's name, where the verb came from, and pi's own reason this harness lists it instead of
+//   running it: docs/rpc-commands.md says "Extension commands are not allowed (use prompt instead)" for the
+//   queued input verbs, and pi's command dispatch belongs to pi's CLI, which this harness does not have.
 const commands = await client.getCommands();
-check("get_commands answers an array of pi's command records", Array.isArray(commands), JSON.stringify(commands));
+check("get_commands answers an array of pi's command records", Array.isArray(commands), JSON.stringify(commands).slice(0, 400));
+const packageCommands = commands.filter((row) => row.source === "extension" && row.invocation === "unsupported");
+check("a discovered pi package's verbs are listed with their source and their refusal (nothing is dropped silently)",
+   packageCommands.length === 0 || packageCommands.every((row) => row.name && row.source && row.invocation === "unsupported"),
+   JSON.stringify(packageCommands.slice(0, 3)));
+// pi's own RpcClient THROWS on a failed record (dist/modes/rpc/rpc-client.js `getData`: "if
+// (!response.success) throw new Error(errorResponse.error)"), so the refusal is seen as an error here -
+// which is what makes the refusal the client's answer rather than a string this harness invented.
+const refusals = [];
+for (const row of packageCommands.slice(0, 2)) {
+   try {
+       refusals.push({ name: row.name, answered: await client.prompt(`/${row.name}`) });
+   } catch (err) {
+       refusals.push({ name: row.name, error: String(err?.message ?? err) });
+   }
+}
+check("submitting one of pi's package verbs answers a refusal that names the verb (and never starts a run)",
+   packageCommands.length === 0 ||
+   refusals.every((entry) => String(entry.error ?? "").includes(entry.name)),
+   JSON.stringify(refusals.map((entry) => ({ name: entry.name, error: String(entry.error ?? entry.answered).slice(0, 90) }))));
 
 // 7. model and thinking verbs, on pi-durable's agent plane.
 const setModel = await client.setModel("faux", "faux-1");

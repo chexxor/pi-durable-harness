@@ -99,11 +99,16 @@ export async function openHarness(options = {}) {
 	const env = (target) => makeEnv({ cwd: target.cwd ?? cwd });
 
 	// The offline model plane: pi-ai's faux provider, no credentials, no network, scripted replies.
-	// It is armed only when the caller handed in no real `models`, so a run can never claim that a
-	// real provider answered.
-	const faux = options.models ? null : fauxProvider({ models: [{ id: "faux-1" }] });
+	// A caller may hand in the faux PROVIDER it already armed inside pi's provider plane (src/agentplane.mjs
+	// builds one beside pi's machine configs); otherwise this open makes its own. Either way the faux
+	// plane is armed BESIDE whatever real providers the caller brought, because a run that asked for a
+	// real model whose provider has no credentials fails at pi-ai's auth layer - it never quietly
+	// answers from this script, which is what keeps an offline run from pretending a real endpoint spoke.
+	const faux = options.faux ?? fauxProvider({ models: [{ id: "faux-1" }] });
 	const models = options.models ?? createModels();
-	if (faux) models.setProvider(faux.provider);
+	// `setProvider` replaces by provider.id, so handing in the faux provider a caller already armed is
+	// a no-op rather than a second faux provider (dist/models.d.ts MutableModels).
+	models.setProvider(faux.provider);
 
 	const harness = await durable.Harness.open(
 		storage,

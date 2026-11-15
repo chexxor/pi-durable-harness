@@ -26,8 +26,10 @@ import { packageRoots, discoverPackages, extensionPaths } from "../src/packages/
 import { loadPiExtensions, loadPiResources, loadContextFiles } from "../src/packages/loader.mjs";
 import { adaptPiExtension, skillsExtension, contextFileExtension } from "../src/packages/adapter.mjs";
 import { CodingTools, createBashTool } from "@earendil-works/pi-durable/tools";
+import { defineExtension, hook, CompactionTask } from "@earendil-works/pi-durable";
 import { capabilityMatrix, unmappedRuntime } from "../src/packages/matrix.mjs";
 import { getAgentDir, formatSkillsForPrompt } from "@earendil-works/pi-coding-agent";
+import { applyThemeToRows, themeForeground, themeTokens } from "../src/tui/theme.mjs";
 
 // pi's own offline switch, set before anything pi reads: the package plane must resolve from what is
 // ALREADY on disk, and a demo that reached npm would not be offline in the sense the repo's contract
@@ -85,6 +87,14 @@ const FIXTURE_EXTENSION = [
  " return { content: [{ type: \"text\", text: \"second-shell-must-not-run\" }], details: { toolCallId } };",
  " },",
  " });",
+ // pi's provider-stage and compaction handler chains: the HOOK POINTS exist in pi-durable (GenerationTask
+ // beforeProviderRequest/afterResponse, CompactionTask beforeCompact), so the bridge has to fire them, and
+ // the fixture records what each handler actually received on globalThis - the same realm jiti runs in, so
+ // the demo reads the handler's own report rather than a remembered one.
+ " pi.on(\"before_provider_request\", (event, ctx) => { const b = (globalThis.__bridge ??= {}); b.providerRequest = { sawPayload: event.payload !== undefined, keys: Object.keys(event.payload ?? {}) }; });",
+ " pi.on(\"before_provider_request\", (event, ctx) => { const b = (globalThis.__bridge ??= {}); b.providerRequestSecond = { sawPayload: event.payload !== undefined }; });",
+ " pi.on(\"after_provider_response\", (event, ctx) => { const b = (globalThis.__bridge ??= {}); b.providerResponse = { type: event.type, statusSeen: event.status ?? null }; });",
+ " pi.on(\"session_before_compact\", (event, ctx) => { const b = (globalThis.__bridge ??= {}); b.compact = { reason: event.reason, custom: event.customInstructions ?? null, entries: (event.preparation?.entries ?? []).length }; return { cancel: true }; });",
  // Two events with no pi-durable hook point, registered on purpose so the inventory has to name them.
  " pi.on(\"session_start\", (event, ctx) => {});",
  " pi.on(\"invented_event_at_this_pin\", (event, ctx) => {});",
@@ -163,6 +173,23 @@ const plane = await loadPiResources(cwd, agentDir, {
 check("fixture skill reachable", plane.skills.some((skill) => skill.name === "fixture-skill"), plane.skills.map((s) => s.name).join(","));
 check("fixture prompt template reachable", plane.prompts.some((p) => JSON.stringify(p).includes("fixture-prompt")), `${plane.prompts.length} prompts`);
 check("real themes reachable from pi's plane", plane.themes.length >= 1, `${plane.themes.length} themes`);
+// pi's PALETTE on the harness's own TUI rows, over a theme pi's loader discovered rather than a colour
+// typed here: docs/themes.md says a theme "control[s] the colors Pi uses in interactive mode", and the
+// record pi hands back carries pi's OWN token names (`accent`, `borderMuted`) with rgb triples. The check
+// below is that the codes this harness paints with are the numbers pi's file publishes, which is what
+// separates pi's palette from a guess.
+const themeRecord = plane.themes.find((theme) => theme.concreteColors?.accent) ?? plane.themes[0];
+const accentCode = themeForeground(themeRecord, "accent");
+const mutedCode = themeForeground(themeRecord, "borderMuted");
+const painted = applyThemeToRows(["  #7 pi.user hello", "> typing now"], themeRecord);
+check("pi's palette reaches the rows fed to pi-tui",
+  accentCode && mutedCode && painted.lines.length === 2 && painted.coloured === 2 &&
+  painted.lines.some((line) => line.includes(`[${accentCode}m`)) &&
+  painted.lines.some((line) => line.includes(`[${mutedCode}m`)) &&
+  themeTokens(themeRecord).includes("accent"),
+  `theme=${themeRecord.name} accent=${accentCode} borderMuted=${mutedCode} tokens=${themeTokens(themeRecord).length} coloured=${painted.coloured}`);
+check("a theme without the token leaves rows uncoloured instead of guessing a hue",
+  applyThemeToRows(["  plain"], { concreteColors: {} }).coloured === 0, "empty palette answers zero");
 check("a missing resource path is a diagnostic, not a crash", plane.promptDiagnostics.length >= 1, `${plane.promptDiagnostics.length} diagnostics`);
 check("pi's own skill formatter used", formatSkillsForPrompt(plane.skills).includes("fixture-skill"), formatSkillsForPrompt(plane.skills).slice(0, 120));
 
@@ -170,7 +197,7 @@ const contextFiles = loadContextFiles(cwd, agentDir);
 check("fixture context file read by pi's loader", contextFiles.some((f) => f.path.includes("AGENTS.md")), contextFiles.map((f) => f.path).join(","));
 
 const extensions = [fixtureAdapted.extension, ...(realAdapted ? [realAdapted.extension] : []), skillsExtension(plane.skills), contextFileExtension(contextFiles, cwd)];
-const h = await openHarness({ cwd, extraExtensions: extensions.filter(Boolean) });
+ const h = await openHarness({ cwd, extraExtensions: extensions.filter(Boolean) });
 const offered = h.registry.snapshot().tools().map((entry) => entry.tool.name);
 check("fixture tool offered by the registry", offered.includes("fixture_echo"), offered.join(","));
 check("real package tool offered by the registry", realExt && [...realExt.tools.keys()].some((name) => offered.includes(name)), offered.join(","));
@@ -219,6 +246,55 @@ const unnamed = unsupported.filter((row) => !row.names.every((name) => doc.inclu
 check("docs name every unsupported capability", unnamed.length === 0, unnamed.map((row) => row.names.join(",")).join(" | "));
 check("docs name every shimmed capability too", doc.includes("shimmed"), doc.slice(0, 200));
 
+ // The bridge's provider-stage handlers fired on the run pi-durable made, and the handler's own report
+ // names what it saw: pi's payload reached the handler (pi's event is {type, payload}), and the SECOND
+ // handler saw a payload too, which is pi-durable's chain rather than pi's runner.
+  const bridged = globalThis.__bridge ?? {};
+ // What pi's bridged handler REPORTED, from the handler's own words rather than a remembered list: pi's
+ // after_provider_response chain fires on pi-durable's afterResponse hook, and pi's HTTP fields (status,
+ // headers) are NOT invented on the way in - pi-durable's hook hands pi-ai's message, not pi's response.
+ check("pi's after_provider_response handler fired on pi-durable's afterResponse hook",
+  bridged.providerResponse !== undefined && bridged.providerResponse.type === "after_provider_response",
+  JSON.stringify(bridged.providerResponse));
+ check("pi's event NAME reached the handler while pi's HTTP status stayed absent (nothing was invented)",
+  bridged.providerResponse !== undefined && bridged.providerResponse.statusSeen === null,
+  JSON.stringify(bridged.providerResponse));
+ // pi's before_provider_request chain is INSTALLED (src/packages/adapter.mjs builds the hook) but the
+ // pinned pi-ai faux provider, which every offline demo answers with, never reaches pi-durable's
+ // beforeProviderRequest call site - pi-durable fires beforeRequest there instead. Recorded rather than
+ // assumed, because it is the reason the matrix row's evidence names the demos it can NOT cite.
+ check("the faux plane does not reach pi's before_provider_request hook point (recorded, not assumed)",
+  bridged.providerRequest === undefined,
+  `providerRequest=${JSON.stringify(bridged.providerRequest)}`);
+ // pi's /compact on pi-durable's compaction plane: Harness.compact runs a CompactionTask whose beforeCompact
+ // hook carries pi's session_before_compact chain. The conversation's own compaction settings are what make
+ // range selection find a cut at all (dist/harness/compaction.js returns complete() when selectCut finds
+ // none, and then no hook fires), and the fixture's handler CANCELS, which is pi-durable's {decline: true}.
+  // pi-durable selects a cut by walking back until `keepRecentTokens` are kept and cutting at the first
+ // candidate that has something to summarize BEFORE it (dist/harness/compaction.js), so the demo grows the
+ // context with two more settled turns before asking for a summary - an empty range would complete the task
+ // without ever firing a hook, which is pi-durable's documented behaviour rather than a failure.
+ scriptTurn(h.faux, ["one more settled answer"]);
+ await prompt(h.conversation, "another input to grow the range", h.context);
+ scriptTurn(h.faux, ["and one more"]);
+ await prompt(h.conversation, "one more input", h.context);
+ const beforeCompactCount = (await transcript(h.conversation, h.context)).length;
+ await h.conversation.configure({ compaction: { enabled: true, reserveTokens: 1, keepRecentTokens: 0 } }, h.context);
+ const compactAnswer = await h.conversation.compact("keep the durable facts", h.context);
+  try { const diagOutcome = await h.harness.waitForTask(compactAnswer, h.context); console.error(`DIAG outcome=${JSON.stringify(diagOutcome)}`); } catch (err) { console.error(`DIAG waitForTask threw: ${String(err?.message ?? err)}`); }
+ const afterCompaction = await transcript(h.conversation, h.context);
+ check("pi's session_before_compact handler fired on pi-durable's CompactionTask",
+  bridged.compact !== undefined && bridged.compact.reason === "manual",
+  JSON.stringify(bridged.compact));
+ check("pi's compaction reason vocabulary is pi-durable's own (manual/threshold/overflow)",
+  bridged.compact !== undefined && ["manual", "threshold", "overflow"].includes(String(bridged.compact.reason)),
+  `reason=${bridged.compact?.reason}`);
+ check("pi's cancel became pi-durable's decline, so no summary entry landed and the task completed with nothing",
+  afterCompaction.length === beforeCompactCount && !afterCompaction.some((e) => String(e.kind).includes("compaction")),
+  `entries before=${beforeCompactCount} after=${afterCompaction.length} kinds=${afterCompaction.map((e) => e.kind).join(",")} task=${JSON.stringify(compactAnswer)}`);
+ check("pi's custom instructions crossed to pi-durable's CompactionTask input",
+  bridged.compact !== undefined && bridged.compact.custom === "keep the durable facts" && bridged.compact.entries > 0,
+  JSON.stringify(bridged.compact));
 console.log(`${checks.filter((c) => c.ok).length}/${checks.length} checks passed`);
 console.log(`packages=${foundNames.length} loaded=${loaded.extensions.length} errors=${loaded.errors.length} offered=${offered.join(",")} sections=${sectionKeys.join(",")}`);
 if (checks.some((c) => !c.ok)) process.exit(1);

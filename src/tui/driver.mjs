@@ -38,17 +38,34 @@ export const DRIVER_KEYS = {
  cancel: [Key.esc],
 };
 
-/** Decode one stdin chunk into key pieces, through pi-tui's OWN parser (dist/keys.d.ts `parseKey`). */
+/** Decode one stdin chunk into key pieces, through pi-tui's OWN parser (dist/keys.d.ts `parseKey`).
+ *
+ * A terminal hands over ONE key per read, but a pipe may hand over several keys at once, so the chunk is
+ * cut into key-sized pieces first: an escape sequence is kept WHOLE (ESC, `ESC [`/`ESC O`, the parameter
+ * bytes and the final byte - so `\x1b[A` stays one piece and pi-tui's parseKey can name it `Key.up`),
+ * and every other character is one key. Which key a piece IS remains pi-tui's answer, not a table here.
+ */
 export function decodeKeys(chunk) {
- const text = String(chunk ?? "");
- const keys = [];
- // A chunk may hold several keys; pi-tui's parser answers ONE key per escape sequence or per plain char,
- // so the split is on escape introducers and each piece is handed to pi-tui rather than decoded here.
- for (const piece of text.split(/(?=\x1b)/)) {
-  if (piece === "") continue;
-  keys.push(piece);
- }
- return keys;
+	const text = String(chunk ?? "");
+	const keys = [];
+	let at = 0;
+	while (at < text.length) {
+		const ch = text[at];
+		if (ch === "\x1b") {
+			let end = at + 1;
+			if (end < text.length && (text[end] === "[" || text[end] === "O")) {
+				end++;
+				while (end < text.length && /[0-9;<=>?]/.test(text[end])) end++;
+				if (end < text.length) end++;
+			}
+			keys.push(text.slice(at, end));
+			at = end;
+			continue;
+		}
+		keys.push(ch);
+		at++;
+	}
+	return keys;
 }
 
 /**
@@ -61,8 +78,12 @@ export function decodeKeys(chunk) {
  *   down there (pi-tui's own screens own that work)
  * @param {number} [opts.pollMs] - the SYNC plane re-read bound when nothing else changed
  * @param {function} [opts.onInput] - (typedLine) => void, what the entrypoint does with a submitted line
+ * @param {boolean} [opts.quitOnBareQ] - is a bare `q` a quit? Durian-Pi's headless key machine says yes,
+ *   and the headless demos keep that answer. A USER-facing interactive window says no: a chat line has
+ *   to be able to start with the letter q, so ESC and Ctrl+C are the quits there and the entrypoint
+ *   turns a submitted line of `q`/`quit` into the same exit.
  */
-export function createUiDriver({ getSize, readState, paint, onExit = () => {}, pollMs = 500, onInput = () => {}, color = false } = {}) {
+export function createUiDriver({ getSize, readState, paint, onExit = () => {}, pollMs = 500, onInput = () => {}, color = false, quitOnBareQ = true } = {}) {
  let running = false;
  let painted = 0;
  let lastPaintAt = null;
@@ -86,11 +107,16 @@ export function createUiDriver({ getSize, readState, paint, onExit = () => {}, p
  const noteData = (chunk) => {
   for (const raw of decodeKeys(chunk)) {
    const id = parseKey(raw) ?? raw;
-   // q / ESC / Ctrl+C quit - Durian-Pi's rule, kept, spelled with pi-tui's key names.
-   if (id === "q" || matchesKey(raw, Key.esc) || matchesKey(raw, Key.ctrl("c"))) {
-    return { quit: id };
-   }
-   if (id === "r" || matchesKey(raw, Key.ctrl("r"))) {
+   // A command key counts only before the line has started, so typing a letter that names one is a
+   // letter, not a command (`r` inside "re-run", `q` inside "quiet").
+   const idle = view.mode !== "input";
+   // ESC and Ctrl+C quit in every mode. A bare `q` and `r` are COMMAND keys only on an EMPTY line (the
+   // overlay closed): once the user is typing, every letter belongs to the line, which is what lets a
+   // chat line say "quiet" or "re-run" instead of quitting or repainting. Durian-Pi's headless rule (q
+   // quits) is kept for the empty-line case, spelled with pi-tui's own Key names.
+   if (matchesKey(raw, Key.esc) || matchesKey(raw, Key.ctrl("c"))) return { quit: id };
+   if (idle && quitOnBareQ && id === "q") return { quit: id };
+   if (idle && (id === "r" || matchesKey(raw, Key.ctrl("r")))) {
     mark("refresh (one immediate tick)");
     continue;
    }

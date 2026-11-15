@@ -27,6 +27,7 @@ import { MODEL_THINKING_LEVELS } from "@earendil-works/pi-ai/providers/model-sch
 // pi's own token arithmetic, so this harness does not re-derive what a context token is
 import { calculateContextTokens } from "@earendil-works/pi-coding-agent";
 import { piEventsOf, queueUpdate } from "./pievents.mjs";
+import { expandInput } from "./promptplane.mjs";
 import { makeEnv } from "./executionenv.mjs";
 import { readFeed } from "./eventfeed.mjs";
 
@@ -176,7 +177,22 @@ export async function handle(parts, msg, emit = null) {
 	 case "follow_up": {
 		// pi spells the body `message`; the attach transport's `text` alias is kept so the
 		// multiplexer demo keeps its wording.
+		// pi spells the body `message`; the attach transport's `text` alias is kept so the
+		// multiplexer demo keeps its wording.
 		const body = msg.message ?? msg.text;
+		// pi expands skill commands and prompt templates BEFORE the input is queued (docs/rpc-commands.md
+		// says exactly this for `prompt`/`steer`/`follow_up`: "Skill commands (/skill:name) and prompt
+		// templates (/template) are expanded before sending/queueing"). The plane is pi's own discovery -
+		// the templates and skills src/packages/loader.mjs found for this cwd - and a command a pi package
+		// registers is refused by name, which is the other half of that sentence: "Extension commands are
+		// not allowed (use prompt instead)".
+		const expanded = expandInput(body, {
+			templates: parts.resources?.promptTemplates ?? [],
+			skills: parts.resources?.skills ?? [],
+			commands: parts.resources?.commands ?? [],
+		});
+		if (expanded.expansion?.refused) return { command, success: false, error: expanded.expansion.refused };
+		const bodyText = expanded.text;
 		// pi's `streamingBehavior` and pi-durable's `whenBusy` are the SAME words ("steer"/"followUp"),
 		// which is why this is a pass-through rather than a translation table.
 		// steer and follow_up force their own behaviour; `prompt` takes whatever pi sent.
@@ -184,7 +200,7 @@ export async function handle(parts, msg, emit = null) {
 		// pi's images are ImageContent blocks, placed after the text as pi-ai's user content.
 		// Text-only input stays a plain string so the transcript shows what a user typed.
 		// @temp: pi-ai's UserMessage content is `string | Content[]`; both are accepted here.
-	 const content = msg.images?.length ? [{ type: "text", text: String(body ?? "") }, ...msg.images] : String(body ?? "");
+			const content = msg.images?.length ? [{ type: "text", text: bodyText }, ...msg.images] : bodyText;
 		// pi's record id doubles as pi-durable's exactly-once admission key: a client that resends
 		// the same id gets the EXISTING submission back, never a second input (admitSubmission).
 		// @temp: a client with no id still needs one stable per attempt, so the process pins one.
@@ -372,7 +388,11 @@ export async function handle(parts, msg, emit = null) {
 	 const commands = [];
 	 for (const template of resources?.promptTemplates ?? []) commands.push({ name: template.name, description: template.description ?? template.name, source: "prompt" });
 	 for (const skill of resources?.skills ?? []) commands.push({ name: `skill:${skill.name}`, description: skill.description ?? skill.name, source: "skill" });
-	 for (const extension of resources?.extensions ?? []) for (const name of extension?.commands ?? []) commands.push({ name, description: null, source: "extension" });
+		// pi's own package plane already says which verbs its extensions register (src/agentplane.mjs inventories
+		// them from the loaded Extension's commands/flags/shortcuts maps); a pi command is INVOKED only inside
+		// pi's CLI, so the row carries pi's name with the reason it is listed here rather than run.
+		for (const row of resources?.commands ?? []) commands.push({ name: row.name, description: row.reason, source: "extension", invocation: "unsupported" });
+		for (const row of resources?.shortcuts ?? []) commands.push({ name: row.name, description: row.reason, source: "extension", invocation: "unsupported" });
 	 return { command, success: true, data: { commands } };
 	}
 
