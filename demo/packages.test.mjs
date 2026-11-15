@@ -25,6 +25,7 @@ import { openHarness, prompt, scriptTurn, transcript } from "../src/core.mjs";
 import { packageRoots, discoverPackages, extensionPaths } from "../src/packages/discover.mjs";
 import { loadPiExtensions, loadPiResources, loadContextFiles } from "../src/packages/loader.mjs";
 import { adaptPiExtension, skillsExtension, contextFileExtension } from "../src/packages/adapter.mjs";
+import { CodingTools, createBashTool } from "@earendil-works/pi-durable/tools";
 import { capabilityMatrix, unmappedRuntime } from "../src/packages/matrix.mjs";
 import { getAgentDir, formatSkillsForPrompt } from "@earendil-works/pi-coding-agent";
 
@@ -70,6 +71,20 @@ const FIXTURE_EXTENSION = [
  // {arguments} replacement and {block} refusal.
  " pi.on(\"tool_call\", (event, ctx) => { if (event.toolName === \"fixture_echo\") event.input = { ...event.input, text: \"patched\" }; });",
  " pi.on(\"tool_call\", (event, ctx) => { if (event.toolName === \"fixture_refuse\") return { block: true, reason: String(event.input.why) }; });",
+ // pi's own override case: an extension registering a name pi already offers (docs/extensions.md: "wrap
+ // built-in tools for logging or access control without reimplementing the UI"). pi-durable's word for it
+ // is the `wraps` slot, so the bridge turns THIS registration into a wrap instead of a second tool.
+ " pi.registerTool({",
+ " name: \"bash\",",
+ " description: \"pi's extension overriding a tool the harness already offers.\",",
+ " parameters: { type: \"object\", properties: { command: { type: \"string\" } }, required: [\"command\"] },",
+ // pi's pre-validation repair, in pi's own words: a model that sends `cmd` instead of pi-durable's
+ // `command` is repaired BEFORE validation, and the repaired shape is what pi-durable's worker gets.
+ " prepareArguments: (args) => ({ command: typeof args.command === \"string\" ? args.command : String(args.cmd ?? \"\") }),",
+ " execute: async (toolCallId, params, signal, onUpdate, ctx) => {",
+ " return { content: [{ type: \"text\", text: \"second-shell-must-not-run\" }], details: { toolCallId } };",
+ " },",
+ " });",
  // Two events with no pi-durable hook point, registered on purpose so the inventory has to name them.
  " pi.on(\"session_start\", (event, ctx) => {});",
  " pi.on(\"invented_event_at_this_pin\", (event, ctx) => {});",
@@ -127,8 +142,12 @@ check("at least one REAL pi extension loaded offline", realLoaded.length >= 1, `
 
 const inventory = [];
 const fixtureExt = loaded.extensions.find((e) => e.path.includes("fixture.ts"));
-const fixtureAdapted = adaptPiExtension(fixtureExt, { name: "fixture-ping", inventory });
-check("both fixture tools bridged", fixtureAdapted.tools.length === 2, `${fixtureAdapted.tools.length} tools`);
+const harnessToolOf = Object.fromEntries(([...CodingTools.tools, createBashTool()].map((tool) => [tool.name, tool])));
+const fixtureAdapted = adaptPiExtension(fixtureExt, { name: "fixture-ping", inventory, offered: [...Object.keys(harnessToolOf)], existingOf: (name) => harnessToolOf[name] });
+check("the fixture's two NEW tools bridged", fixtureAdapted.tools.length === 2, `${fixtureAdapted.tools.length} tools`);
+check("pi's override of an offered name became a pi-durable wrap, not a second tool", fixtureAdapted.wraps.length === 1, `tools=${fixtureAdapted.tools.length} wraps=${fixtureAdapted.wraps.length}`);
+check("the wrap names the tool it wraps", (fixtureAdapted.wraps[0]?.tool ?? null) === "bash" && typeof fixtureAdapted.wraps[0]?.wrap === "function", JSON.stringify({ tool: fixtureAdapted.wraps[0]?.tool, keys: Object.keys(fixtureAdapted.wraps[0] ?? {}) }));
+check("the wrap is inventoried as mapped, not dropped", inventory.some((row) => row.name === "bash" && row.status === "shimmed"), inventory.filter((row) => row.name === "bash").map((r) => r.status).join(","));
 const realExt = realLoaded.find((e) => e.tools.size > 0);
 check("a real package registers tools", !!realExt, realLoaded.map((e) => `${e.path} tools=${e.tools.size}`).join(" | "));
 const realAdapted = realExt ? adaptPiExtension(realExt, { name: "pi-real-package", inventory }) : null;
@@ -161,7 +180,11 @@ const sectionKeys = (agent.sections ?? []).map((s) => s.key);
 check("skills section reaches the agent", sectionKeys.includes("skills"), sectionKeys.join(","));
 check("context file section reaches the agent", sectionKeys.some((key) => key.includes("agents_md")), sectionKeys.join(","));
 
+const wrapMarker = join(cwd, "piwrap.txt");
 scriptTurn(h.faux, [
+ // pi's override case end to end: the model sends `cmd`, pi's prepareArguments repairs it to pi-durable's
+ // `command`, pi-durable's OWN bash runs the command exactly once, and the wrapper adds its log line.
+ { tool: "bash", args: { cmd: `printf 'pi-wrap\\n' >> ${wrapMarker}` } },
  // `times` arrives as a STRING, so pi's prepareArguments (bridged unchanged) has to repair it before
  // pi-durable validates; the tool_call handler then patches `text`, which the bridge reports as
  // pi-durable's argument replacement. Both are visible in the committed result.
@@ -176,12 +199,17 @@ check("fixture tool ran through pi-durable's registry", results.some((r) => r.in
 check("pi's prepareArguments repaired the string number", results.some((r) => r.includes('"times":3') || r.includes("patched patched patched")), results.join(" | "));
 check("pi's tool_call handler patched the arguments", results.some((r) => r.includes("patched")), results.join(" | "));
 check("pi's blocking handler refused the second call", results.some((r) => r.includes("blocked") || r.includes("because the fixture says so")) && !results.some((r) => r.includes("should never have run")), results.join(" | "));
+const wrapped = results.filter((r) => r.includes("logged by pi's wrapper of bash"));
+check("pi-durable's own bash ran once under the wrap (the marker file gained one line)", readFileSync(wrapMarker, "utf8").split("\n").filter((l) => l.trim()).length === 1, `marker lines=${readFileSync(wrapMarker, "utf8").trim()}`);
+check("the wrapped call reports pi's wrapper line beside pi-durable's own output", wrapped.length === 1, `${wrapped.length} wrapped results: ${wrapped.join(" | ").slice(0, 200)}`);
+check("no second shell implementation ran (pi's override composes instead of replacing)", !results.some((r) => r.includes("second-shell-must-not-run")), results.join(" | ").slice(0, 240));
+check("pi's argument repair reached pi-durable's worker (cmd became command)", wrapped.length === 1 && readFileSync(wrapMarker, "utf8").includes("pi-wrap"), `wrapped=${wrapped.length} marker=${readFileSync(wrapMarker, "utf8").trim()}`);
 check("the turn ended with an answer", entries.some((e) => e.kind === "pi.assistant" && JSON.stringify(e.model).includes("the package plane answered")), entries.map((e) => e.kind).join(","));
 
 // The inventory is what the docs promise, so the promise has to cover what actually loaded: every name
 // a REAL pi extension registered must be a row of the matrix, and the detector must be able to fail
 // (the fixture's invented event is what proves it can).
-const realInventory = inventory.filter((row) => row.name !== "invented_event_at_this_pin" && row.name !== "session_start");
+const realInventory = inventory.filter((row) => row.name !== "invented_event_at_this_pin" && row.name !== "session_start" && row.name !== "bash");
 check("matrix covers every real pi capability that loaded", unmappedRuntime(realInventory).length === 0, unmappedRuntime(realInventory).map((row) => `${row.capability}:${row.name}`).join(" | "));
 check("the detector catches an unnamed capability", unmappedRuntime(inventory).some((row) => row.name === "invented_event_at_this_pin"), "detector found nothing to report");
 

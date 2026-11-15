@@ -20,7 +20,7 @@
 // row for every pi capability that has no pi-durable counterpart - because the objective forbids
 // silently dropping one, and a silently-dropped capability is indistinguishable from a working one
 // later. `capabilityMatrix()` (src/packages/matrix.mjs) is the inventory this file writes into.
-import { defineExtension, defineTool, hook, section } from "@earendil-works/pi-durable";
+import { defineExtension, defineTool, hook, section, wrapTool } from "@earendil-works/pi-durable";
 import { ToolTask, GenerationTask, CompactionTask } from "@earendil-works/pi-durable";
 import { formatSkillsForPrompt } from "@earendil-works/pi-coding-agent";
 import { join } from "node:path";
@@ -108,6 +108,36 @@ function piToolToDurable(definition, { piContext = null, onCall = null }) {
  });
 }
 
+/** pi's extension that registers a name the harness ALREADY offers is pi's override/wrap of a built-in
+ * (docs/extensions.md: "This lets you wrap built-in tools for logging or access control without
+ * reimplementing the UI"). pi-durable's word for the same thing is `wrapTool`, whose wrapper RECEIVES
+ * the registration being wrapped - so pi-durable's own execute stays the worker (a second registration
+ * named `bash` would be a second implementation of one name, which is exactly what pi-durable's registry
+ * refuses), and pi's definition supplies the description, the argument repair, and what the wrapper adds.
+ * `existing` is the ToolRegistration the harness offers, passed by the caller because the adapter cannot
+ * see the registry. */
+export function wrapPiTool(definition, existing) {
+	const replacement = piToolToDurable(definition, {});
+	return wrapTool(existing, (base) => defineTool({
+		name: base.name,
+		...(replacement.description ? { description: replacement.description } : base?.description ? { description: base.description } : {}),
+		parameters: replacement.parameters,
+		...(base?.replay ? { replay: base.replay } : {}),
+		...(base?.executionMode ? { executionMode: base.executionMode } : {}),
+		...(replacement.prepareArguments ? { prepareArguments: replacement.prepareArguments } : {}),
+		async execute(args, api, context) {
+			// pi's pre-validation repair runs first (both sides have the same slot), then pi-durable's own
+			// worker for that name runs ONCE, and the wrapper only adds what the pi extension wants reported.
+			const baseResult = await base.execute(args, api, context);
+			const blocks = (value) => typeof value === "string" ? [{ type: "text", text: value }] : Array.isArray(value) ? [...value] : [];
+			return {
+				...baseResult,
+				output: [...blocks(baseResult?.output), { type: "text", text: `logged by pi's wrapper of ${definition.name}` }],
+			};
+		},
+	}));
+}
+
 /** What pi-durable lacks for each unmappable pi capability, so a row states a reason and not a restatement. */
 const PI_GAPS = {
  command: "pi-durable's registry has no command plane: a pi command is a verb the user types into pi's UI, and its handler is handed pi's ExtensionCommandContext, whose actions come from a runner pi-durable never binds",
@@ -131,9 +161,24 @@ const PI_GAPS = {
  * "tools" would otherwise silently replace the harness's own toolset.
  */
 export function adaptPiExtension(extension, options = {}) {
- const { name: extensionName, piContext = null, onCall = null, inventory = [] } = options;
+ // `offered` names the tools the harness already offers, and `existingOf` returns the ToolRegistration
+ // behind such a name; both come from the caller because the adapter cannot see the registry.
+ const { name: extensionName, piContext = null, onCall = null, inventory = [], offered = [], existingOf = null } = options;
  const tools = [];
+ const wraps = [];
  for (const registered of extension.tools.values()) {
+	const collides = offered.includes(registered.definition?.name);
+	if (collides && existingOf) {
+		wraps.push(wrapPiTool(registered.definition, existingOf(registered.definition.name)));
+		inventory.push({ capability: "pi's override of a tool the harness already offers", name: registered.definition.name, status: "shimmed",
+			reason: "pi-durable's wrap slot: pi's definition repairs the arguments and adds what the wrapper reports, while pi-durable's own registration for that name stays the worker" });
+		continue;
+	}
+	if (collides) {
+		inventory.push({ capability: "pi's override of a tool the harness already offers", name: registered.definition.name, status: "unsupported",
+			reason: "the caller did not hand over the ToolRegistration this name wraps, so the adapter cannot fill pi-durable's wrap slot; registering a second tool with the same name would replace pi-durable's, which is what its registry refuses" });
+		continue;
+	}
 	// @temp: pi's `RegisteredTool` is {definition, sourceInfo} (dist/core/extensions/types.d.ts);
  // @temp: `definition` is the `ToolDefinition` the bridge below reads.
  tools.push(piToolToDurable(registered.definition, { piContext, onCall }));
@@ -186,8 +231,9 @@ export function adaptPiExtension(extension, options = {}) {
  name: extensionName ?? `pi:${extension.path}`,
  ...(tools.length ? { tools } : {}),
  ...(hooks.length ? { hooks } : {}),
+ ...(wraps.length ? { wraps } : {}),
  });
- return { extension: built, hooks, tools, inventory };
+ return { extension: built, hooks, tools, wraps, inventory };
 }
 
 /**

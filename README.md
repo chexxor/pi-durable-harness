@@ -124,13 +124,13 @@ ledger separate from pi-durable's usage plane, and classifies endpoints (loopbac
 
 The pi package ecosystem is reused through pi's own library exports, and every capability pi has that
 pi-durable does not is **named** rather than quietly dropped: [docs/package-support.md](docs/package-support.md)
-is generated from `src/packages/matrix.mjs` by `scripts/render-matrix.mjs` — 94 rows
-(10 native / 34 shimmed / 50 unsupported), evidence per row, plus the packages actually installed on
+is generated from `src/packages/matrix.mjs` by `scripts/render-matrix.mjs` — 95 rows
+(10 native / 35 shimmed / 50 unsupported), evidence per row, plus the packages actually installed on
 this machine and what loaded from them. `src/packages/loader.mjs` uses pi's `DefaultResourceLoader`,
 `discoverAndLoadExtensions` and `loadProjectContextFiles`; `src/packages/adapter.mjs` maps pi's
 `registerTool`, `tool_call`/`tool_result`/provider/compaction handlers, skills, prompts, themes and
-context files onto pi-durable's `defineExtension`/`defineTool`/`hook`/`section`.
-`demo/packages.test.mjs` (35 checks) proves the shim runs end to end on a fixture package and on the
+context files onto pi-durable's `defineExtension`/`defineTool`/`hook`/`section`/`wrapTool` — a pi extension that registers a tool name the harness already offers becomes pi-durable's `wraps` slot (pi's `wrapRegisteredTool` case), so pi's argument repair and log line run AROUND pi-durable's own tool rather than beside it: `demo/packages.test.mjs` proves the wrapped `bash` ran exactly once (a marker file gained one line) and that pi's own execute never replaced the worker.
+`demo/packages.test.mjs` (42 checks) proves the shim runs end to end on a fixture package and on the
 four real pi packages installed here. `scripts/audit-pi-docs.mjs` re-reads pi's OWN docs inside the
 pinned package — all twelve that enumerate a surface this harness claims: packages.md, extensions.md,
 rpc.md AND rpc-commands.md (pi's 34 RPC verbs), json.md (pi's event records), message-types.md (pi-ai's

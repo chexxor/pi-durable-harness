@@ -17,19 +17,25 @@ The spine lands before any sibling, because every sibling imports `src/core.mjs`
 | task | files that task owns (from its checkpoint tag) | verification contract (the demo/audit that must exit 0) |
 | --- | --- | --- |
 | task-3 model plane + spend ledger | `src/providers.mjs` `src/spend.mjs` `demo/providers.test.mjs` | 22 checks: provider registration from the machine's agent dirs, ref resolution by the prefix rule, endpoint-class spend (loopback free, LAN/local not free) through pi-ai's `calculateCost` |
-| task-4 tool surface + execution env | `src/toolsurface.mjs` `src/executionenv.mjs` `cli.mjs` `demo/tools.test.mjs` | 14 checks: read/write/edit/bash settle through pi-durable, an unoffered tool settles `tool_unavailable`, guard rules narrow, env is built per call |
-| task-5 store read API | `src/readapi.mjs` `demo/readapi.test.mjs` | 20 checks: `Harness.open(..., {readOnly: true})` and the storage scans only, no raw SQL, parentage printed |
+| task-4 tool surface + execution env | `src/toolsurface.mjs` `src/executionenv.mjs` `demo/tools.test.mjs` | 14 checks: read/write/edit/bash settle through pi-durable, an unoffered tool settles `tool_unavailable`, guard rules narrow, env is built per call |
+| task-5 store read API | `src/readapi.mjs` `demo/readapi.test.mjs` | 21 checks: `Harness.open(..., {readOnly: true})` and the storage scans only, no raw SQL, parentage printed |
 | task-6 interactive TUI on pi-tui | `src/tui/rows.mjs` `src/tui/sync.mjs` `src/tui/frame.mjs` `src/tui/viewmode.mjs` `src/tui/driver.mjs` `demo/tui.test.mjs` `demo/tui-interactive.mjs` | 27 checks: rows per committed entry, in-flight partial, clipping, overlay remembers the frame underneath, headless driver rules, and the round trip (typed line → owner's socket → one committed submission → the reader's view gains that `pi.user` row) |
-| task-7 CLI surfaces | `src/cli-intent.mjs` `cli.mjs` `demo/cli-open.mjs` `demo/cli.test.mjs` | 31 checks: print/JSON/RPC share ONE invocation path, unknown flag refused, reopen verbs reopen the SAME store, replay rule |
-| task-8 pi package compatibility | `src/packages/discover.mjs` `src/packages/loader.mjs` `src/packages/adapter.mjs` `src/packages/matrix.mjs` `demo/packages.test.mjs` `scripts/render-matrix.mjs` | 35 checks: five real pi packages loaded (three user-plane, one project-plane, one fixture), pi handlers bridged at pi-durable hook points, matrix invariants |
+| task-7 CLI surfaces | `src/cli-intent.mjs` `cli.mjs` `src/rpc.mjs` `src/pievents.mjs` `demo/cli-open.mjs` `demo/cli.test.mjs` `demo/rpc.test.mjs` | 34 checks + 50 rpc checks: print/JSON/RPC share ONE invocation path, unknown flag refused, reopen verbs reopen the SAME store, replay rule |
+| task-8 pi package compatibility | `src/packages/discover.mjs` `src/packages/loader.mjs` `src/packages/adapter.mjs` `src/packages/matrix.mjs` `demo/packages.test.mjs` `scripts/render-matrix.mjs` | 42 checks: five real pi packages loaded (three user-plane, one project-plane, one fixture), pi handlers bridged at pi-durable hook points, matrix invariants |
 | task-9 ownership + multiplexer | `src/ownership.mjs` `src/attach.mjs` `demo/attach-writer.mjs` `demo/attach-reader.mjs` `demo/attach.test.mjs` | 14 checks: one writer claims, second writer refused naming the holder, reader reads without a second mutation line, queued write lands exactly once by `requestId`, clean exit releases, SIGKILL reclaims, stale lock = free |
 | task-10 settings + policy | `src/settings.mjs` `demo/settings.test.mjs` | 27 checks: pi's SettingsManager resolution, system-prompt sections, compaction/restart/retry policies from pi-durable's exported defaults, read back by a SECOND process |
-| task-11 docs/provenance | `scripts/audit-provenance.mjs` `scripts/audit-orchestration.mjs` `docs/provenance.md` `docs/package-support.md` `README.md` | every source file carries a provenance header (81/81), no code-level dependency on the dropped orchestration concepts (44 files), docs generated from the matrix data |
-| task-12 suite + offline proof | `scripts/suite.mjs` `scripts/audit-pi-docs.mjs` | `SUITE pass=12 fail=0`, exit 0; `strace -f -e trace=connect` over the suite: 0 `AF_INET` connects |
+| task-11 docs/provenance | `scripts/audit-provenance.mjs` `scripts/audit-orchestration.mjs` `docs/provenance.md` `docs/package-support.md` `README.md` | every source file carries a provenance header (87/87), no code-level dependency on the dropped orchestration concepts (47 files), docs generated from the matrix data |
+| task-12 suite + offline proof | `scripts/suite.mjs` `scripts/audit-pi-docs.mjs` `scripts/audit-provenance.mjs` `scripts/audit-orchestration.mjs` | `SUITE pass=13 fail=0`, exit 0; `strace -f -e trace=connect` over the suite: 0 `AF_INET` connects |
 
-The file sets are disjoint by construction — no file appears in two rows — which is what makes the sibling
-tasks parallel rather than sequential: task-3 never edits a file task-4 owns, and so on. The checkpoint tag
-per task is the machine-checkable half of that claim:
+The sibling file sets (task-3…task-10) are disjoint — no file appears in two of those rows — which is what
+makes them parallel rather than sequential: task-3 never edits a file task-4 owns, and so on. Two
+honest exceptions are visible in the derivation above rather than hidden in this sentence: `cli.mjs` was
+touched by task-4 (it installed the tool-selection flags there) and again by task-7 (the print/JSON/RPC
+modes) and by the task-12 RPC commit — those are SEQUENTIAL extensions of one file, not siblings run in
+parallel; and task-8, task-11 and task-12 all touch the generated artifacts (`docs/package-support.md`,
+`docs/provenance.md`, `demo/packages.test.mjs`, `README.md`) because those commits run after the siblings,
+in the spine-then-siblings-then-docs order the protocol states. The checkpoint tag per task is the
+machine-checkable half of the claim, and the loop below prints exactly which commits share a file:
 
 ```
 git log --reverse --format="%H %s" | while read hash rest; do
@@ -42,9 +48,9 @@ done
 ## Re-running the harness's own checks
 
 ```
-node scripts/suite.mjs                 # 12 demos+audits, exit 0, no keys, no network
+node scripts/suite.mjs                 # 13 demos+audits, exit 0, no keys, no network
 node scripts/sync-pi.mjs --offline --report   # PIN == DECLARED == RESOLVED, fallback null, drift "offline"
-node scripts/audit-pi-docs.mjs         # pi's OWN docs vs the matrix: 213 capabilities, 82 rows
+node scripts/audit-pi-docs.mjs         # pi's OWN docs vs the matrix: 306 capabilities, 95 rows
 ```
 
 ## Where the work was handed to pi-native sub-agents
