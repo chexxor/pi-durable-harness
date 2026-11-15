@@ -125,6 +125,23 @@ async function main() {
   "the `quit` line ended the session instead of becoming agent input",
   `quit rows=${quitRows.length}`);
 
+  // THE USER'S ACTUAL COMMAND: `npm run cli` is what the README tells a terminal user to type.
+  // npm swallows flags of its own, so the arguments travel in npm's documented pass-through form
+  // (`--`), and npm runs the script from the package root - which is where the store default and the
+  // ownership claim belong. Same pty, same assertions.
+  const npmTerm = await inTerminal(["npm", "run", "cli", "--", "--store", store, "--cwd", dir, "--faux", "the npm answer"],
+   [Buffer.from(`${typed} again\r`).toString("hex"), Buffer.from("quit\r").toString("hex")]);
+  record(npmTerm.error === null && npmTerm.exit === 0 && npmTerm.stream.includes("plane:") && npmTerm.stream.includes("submitted:"),
+   "`npm run cli` (npm's pass-through form for the flags) opens the same interactive window in a terminal",
+   `exit=${npmTerm.exit} plane=${npmTerm.stream.includes("plane:")} ack=${npmTerm.stream.includes("submitted:")}`);
+  const npmReopen = await runNode(["--store", store, "--cwd", dir, "-c", "--mode", "json"]);
+  const npmEnds = npmReopen.out.split("\n").flatMap((line) => {
+   try { return [JSON.parse(line)]; } catch { return []; }
+  }).filter((r) => r?.type === "message_end" && r?.message?.role === "user" && JSON.stringify(r.message).includes(`${typed} again`));
+  record(npmReopen.exit === 0 && npmEnds.length === 1,
+   "the line typed into `npm run cli` is committed exactly once on the store that run owned",
+   `typed rows=${npmEnds.length}`);
+
  // The contrast that makes the TTY rule mean something: the SAME command with stdin piped is print
  // (and errors, since no prompt was given) - so `npm run cli` in a terminal and piped in a script
  // choose different surfaces by pi-like choice rather than by accident.

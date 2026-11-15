@@ -33,6 +33,7 @@ Then the four CLI surfaces, each proved by `demo/cli.test.mjs` and `demo/tui.tes
 
 ```bash
 npm run cli                                # a plain run IN A TERMINAL: the interactive window, this directory's store
+npm run cli -- --store run.sqlite -p "hi"  # npm swallows its OWN flags, so harness flags travel after `--`
 node cli.mjs -p "hello"                    # print mode: stdout is the final answer text only
 node cli.mjs --mode json -p "hello"        # NDJSON: pi's session header + event records (docs/json.md)
 node cli.mjs --mode rpc                    # pi's protocol: {"type":"prompt",...} in, {"type":"response",...} out
@@ -44,8 +45,11 @@ That rule is proved against a REAL terminal, not only a pipe: `demo/tty.test.mjs
 (python3's stdlib `pty` module — Node has no pty primitive, and the harness code under test never sees
 python), runs `node cli.mjs` inside it with no prompt and no `--mode`, and asserts the window answered the
 typed line, painted pi's theme, committed the line exactly once on the store it owned, quit on a bare
-`quit` line, and that the SAME command with piped stdin chooses print instead. The pty is a kernel object,
-not a socket, so the demo stays inside the offline proof.
+`quit` line, and that the SAME command with piped stdin chooses print instead. The demo also drives the
+command the README actually tells a terminal user to type — `npm run cli -- --store ... --cwd ...`, npm's
+documented pass-through form — and asserts that run opens the same window, paints pi's theme, and commits
+the typed line exactly once on the store IT owned. The pty is a kernel object, not a socket, so the demo
+stays inside the offline proof.
 
 Every surface also prints its own plane inventory on stderr (`plane: packages=… extensions=… loaded=…
 bridged=… templates=… skills=… themes=… theme=… skipped=…`), counted from what THIS run loaded, plus a
