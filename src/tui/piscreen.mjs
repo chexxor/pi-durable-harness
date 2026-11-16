@@ -23,8 +23,9 @@
 // LiveState, pi-durable's usage plane, pi's ModelRecord). It never opens storage and never mutates
 // a conversation, so a headless demo can paint it without a TTY.
 
-import { AssistantMessageComponent, CompactionSummaryMessageComponent, CustomMessageComponent, CustomEditor, FooterComponent, SkillInvocationMessageComponent, Theme, ToolExecutionComponent, UserMessageComponent, getMarkdownTheme, getSelectListTheme, initTheme, keyHint } from "@earendil-works/pi-coding-agent";
+import { AssistantMessageComponent, calculateContextTokens, CompactionSummaryMessageComponent, CustomMessageComponent, CustomEditor, FooterComponent, SkillInvocationMessageComponent, Theme, ToolExecutionComponent, UserMessageComponent, getMarkdownTheme, getSelectListTheme, initTheme, keyHint } from "@earendil-works/pi-coding-agent";
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { Box, Container, KeybindingsManager, ScrollView, Spacer, TUI_KEYBINDINGS, Text, VStack } from "@earendil-works/pi-tui";
 import { AssistantEntry, CompactionEntry, ResetEntry, SystemEntry, ToolResultEntry, UserEntry } from "@earendil-works/pi-durable";
 
@@ -91,6 +92,52 @@ export function piEditorTheme() {
  * bordered box, the history and the keybinding hints. */
 export function piEditorDock(ui, { history = [] } = {}) {
  return new CustomEditor(ui, piEditorTheme(), new KeybindingsManager(TUI_KEYBINDINGS), { history });
+}
+
+/** pi's OWN app-key table (ESC cancels, Ctrl+D exits an empty draft, Ctrl+C clears): `APP_KEYBINDINGS`
+ * in pi-coding-agent's `dist/core/keybindings.d.ts` is a `declare const`, not a root export at v1.5.1,
+ * and pi's app-key manager (`dist/core/keybindings.js`) is not in the package's `exports` map either,
+ * so the table is READ off pi's pinned declaration file on this machine rather than retyped here - the
+ * key names and their default keys are pi's words, and a harness that invented `ctrl+q` for cancel
+ * would be a different product. Only the app actions a dock needs are taken, so pi's other app actions
+ * (model cycling, thinking cycling, suspend) stay unclaimed and named in the capability matrix. */
+export function piAppKeyDefaults({ only = ["app.interrupt", "app.exit", "app.clear"] } = {}) {
+ const table = readPiAppKeybindings();
+ return Object.fromEntries(table.filter(([name]) => only.includes(name)));
+}
+
+function readPiAppKeybindings() {
+ const declarationUrl = new URL("./core/keybindings.d.ts", import.meta.resolve("@earendil-works/pi-coding-agent"));
+ const text = readFileSync(declarationUrl, "utf8");
+ const at = text.indexOf("declare const APP_KEYBINDINGS: {");
+ if (at < 0) throw new Error(`pi's app-key table is not in ${declarationUrl} - the pin changed shape, and a guessed key table would be a lie`);
+ let end = -1;
+ let depth = 0;
+ for (let i = text.indexOf("{", at); i < text.length; i += 1) {
+  if (text[i] === "{") depth += 1;
+  if (text[i] === "}") {
+   depth -= 1;
+   if (depth === 0) { end = i; break; }
+  }
+ }
+ const block = text.slice(at, end + 1);
+ return [...block.matchAll(/readonly "(app\.[a-z.]+)":\s*\{[^}]*readonly defaultKeys:\s*([^;]+);[^}]*readonly description:\s*"([^"]*)"/g)]
+  .map(([, name, rawKeys, description]) => {
+   const keys = rawKeys.match(/"([^"]*)"/g)?.map((key) => key.slice(1, -1)) ?? [];
+   return [name, { defaultKeys: keys.length === 1 ? keys[0] : keys, description }];
+  });
+}
+
+/** pi's dock with pi's app keys, so pi's OWN keybinding layer decides what a keystroke means: `tui.input.submit`
+ * (enter) makes pi-tui's Editor call its `onSubmit` callback with the draft, `app.interrupt` (escape) fires
+ * `onEscape`, `app.exit` (ctrl+d) fires `onCtrlD` only when the draft is empty (pi's own rule, read from
+ * custom-editor.js), and `app.clear` (ctrl+c) fires the handler registered by `onAction`. `conflicts` is pi-tui's
+ * own report of keys pi uses for two actions at once (ESC is cancel AND close, ctrl+c is copy AND clear) - the
+ * harness does not resolve them silently, it shows what pi saw. */
+export function piDockOf(ui, { history = [], userBindings = null, appKeys = ["app.interrupt", "app.exit", "app.clear"] } = {}) {
+ const definitions = { ...TUI_KEYBINDINGS, ...piAppKeyDefaults({ only: appKeys }) };
+ const keybindings = new KeybindingsManager(definitions, userBindings === null ? undefined : userBindings);
+ return { editor: new CustomEditor(ui, piEditorTheme(), keybindings, { history }), keybindings, conflicts: keybindings.getConflicts() };
 }
 
 /** One committed pi-durable entry as pi's own components, oldest-first inside the entry.
@@ -231,9 +278,12 @@ function textOf(message) {
 /** pi's transcript document: pi's ScrollView follows the END of its document, so the rows must be
  * appended OLDEST first, while pi-durable's `entries` read returns NEWEST first (dist/entries.d.ts
  * pages are newest-first). One place owns that reversal so every surface gets the same order. */
-export function piTranscriptDocument({ entries, ui, cwd = null, markdownTheme = piMarkdownTheme(), pendingTools = {}, outputPad = 1 }) {
+export function piTranscriptDocument({ entries, ui, cwd = null, markdownTheme = piMarkdownTheme(), pendingTools = {}, outputPad = 1, prepend = [] }) {
  const document = new Container();
  const classOf = {};
+ // pi prints its startup header INTO the transcript, oldest-first, so a header component goes in BEFORE
+ // the committed entries and scrolls up and out of the way as the session grows.
+ for (const component of prepend) document.addChild(component);
  for (const entry of [...entries].reverse()) {
   for (const component of piEntryComponents(entry, { ui, cwd, markdownTheme, pendingTools, outputPad })) {
    const name = component.constructor?.name ?? "?";
@@ -260,6 +310,42 @@ export function piScreen({ document, editor, status = null, footer = null, pendi
    { component: dock, basis: "auto", grow: 0, shrink: 1, minSize: 1 },
   ]),
  };
+}
+
+/** pi's footer context numbers (`contextTokens` from pi-ai's own counter, summed over pi-durable's
+ * committed `pi.usage` buckets) against the model record pi's plane resolved. Arithmetic over pi-durable's
+ * state and pi's own model record - no second ledger, no guessed window. */
+export function piContextOf(entries, models, ref) {
+ let tokens = 0;
+ for (const entry of entries) for (const message of Array.isArray(entry?.model) ? entry.model : []) {
+  if (message?.usage) tokens += calculateContextTokens(message.usage);
+ }
+ const window = models?.getModel?.(ref?.provider, ref?.model ?? ref?.modelId)?.contextWindow ?? 0;
+ return { tokens, contextWindow: window, percent: window ? Math.round((tokens / window) * 1000) / 10 : 0 };
+}
+
+/** The model pi's footer prints: the reference the run resolved, plus the context window and the
+ * reasoning flag from pi's OWN model record (pi's footer shows `custom`/`pro` markers it reads there).
+ * A faux plane answers with its own record, so an offline run shows the faux model rather than naming
+ * pi's settings default as if an endpoint spoke (src/cli-intent.mjs says the same thing on stderr). */
+export function piModelOf(parts) {
+ const ref = parts?.intent?.model ? { provider: parts.intent.provider ?? "faux", model: parts.intent.model }
+  : parts?.modelRef ?? parts?.agent?.model ?? { provider: "faux", model: "faux-1" };
+ const record = parts?.models?.getModel?.(ref.provider, ref.model) ?? null;
+ return { id: String(ref.model ?? ref.modelId ?? ""), provider: String(ref.provider ?? ""), contextWindow: record?.contextWindow ?? 0, reasoning: record?.reasoning ?? false };
+}
+
+/** The branch pi's footer shows, read from the run cwd's own `.git/HEAD` (a data read of pi's own
+ * repository state, no shell), or null when the cwd is not a repository, in which case pi draws nothing. */
+export function piGitBranchOf(cwd) {
+ if (!cwd) return null;
+ try {
+  const head = readFileSync(join(cwd, ".git", "HEAD"), "utf8").trim();
+  const match = /^ref: refs\/heads\/(.+)$/m.exec(head);
+  return match ? match[1] : head.slice(0, 12);
+ } catch {
+  return null;
+ }
 }
 
 /** pi's FooterComponent, driven by pi-durable's numbers instead of pi's AgentSession. pi's footer
