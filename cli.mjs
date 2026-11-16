@@ -29,7 +29,8 @@ import { openWriterView, writerSubmit } from "./src/tui/writer.mjs";
 import { createUiDriver } from "./src/tui/driver.mjs";
 import { applyThemeToRows } from "./src/tui/theme.mjs";
 import { renderFrame, rowComponent, INPUT_MARK } from "./src/tui/frame.mjs";
-import { ProcessTerminal, TuiMainScreen } from "@earendil-works/pi-tui";
+import { piDockLoop } from "./src/tui/pidockloop.mjs";
+import { ProcessTerminal, TuiAltScreen, TuiMainScreen } from "@earendil-works/pi-tui";
 
 const HELP = `pi-durable-harness [options] [--] [prompt words...]
   --cwd <dir>             work in <dir> (default: the directory this ran in)
@@ -50,7 +51,8 @@ const HELP = `pi-durable-harness [options] [--] [prompt words...]
   --thinking <level>      thinking level for the conversation (pi-durable's Agent.thinkingLevel)
   --faux <text>           offline scripted reply (demo/CI; no keys, no network)
   --attach                force attach to a running owner as a reader
-  --tui                   the interactive TUI over this session (this process owns the store)
+  --tui                   the harness's flat row surface over this session (this process owns the store)
+  --row-view              same as --tui (spelled out, so the row surface stays reachable by name)
   --keystroke-input       feed the TUI keystroke chunks instead of whole lines (what a terminal sends)
   --hold <ms>             stay open after a print turn (so others can attach)
   --width <cols>          TUI width (default: the terminal's)
@@ -90,7 +92,7 @@ export function parseArgs(argv) {
     else if (t === "--height") { a.height = Number(argv[i + 1]); i++; }
     else if (t === "--attach") a.attach = true;
     else if (t === "--attach") a.attach = true;
-    else if (t === "--tui") a.tui = true;
+    else if (t === "--tui" || t === "--row-view") a.tui = true;
     else if (t.startsWith("--")) {
       const name = t.slice(2);
       const value = argv[i + 1];
@@ -183,7 +185,14 @@ async function main() {
   // explicit prompt/mode is print/JSON, `--mode rpc` is the pipe protocol (src/cli-intent.mjs' rule, so
   // `npm run cli` in a terminal and `npm run cli -p "..."` in a script cannot drift apart).
   const surface = chooseSurface(args, { isTty: process.stdin.isTTY === true });
-  const tui = args.tui || surface === "tui";
+  // The explicit row-view flag (`--tui`, or `--row-view` spelled out) keeps the harness's flat row
+  // surface, which is what the headless fixtures assert. A terminal run that names NO surface gets
+  // pi's own screen: pi's chat-viewport layout, pi's components over pi-durable's committed entries,
+  // pi's Editor as the dock. src/cli-intent.mjs' chooseSurface still decides tui-vs-print, so a piped
+  // run cannot accidentally open a window that would sit open forever.
+  const rowView = args.tui === true;
+  const tui = rowView || surface === "tui";
+  const piScreen = tui && !rowView;
   // A real terminal delivers keystroke chunks; `--keystroke-input` makes a piped run deliver them the
   // same way, so the offline demo exercises the interactive path rather than the scripted line path.
   const interactive = tui && (process.stdin.isTTY === true || args.keystrokeInput === true);
@@ -226,7 +235,10 @@ async function main() {
   // ONE reader per process, chosen by the surface: a TUI in a terminal gets keystrokes, a scripted
   // TUI gets whole lines, and RPC gets pi's JSONL records. Registering two stdin listeners would
   // split one stream into two half-fed buffers, which is why the choice happens here.
-  const reader = tui ? (interactive ? keystrokeReader() : stdinReader()) : mode === "rpc" ? stdinReader() : null;
+  // The pi screen has NO reader here on purpose: pi-tui's `ProcessTerminal.start()` owns stdin and
+  // `tui.js handleTerminalInput` hands every keystroke to the focused component, so a second stdin
+  // listener would split the terminal's stream into two half-fed buffers.
+  const reader = tui && !piScreen ? (interactive ? keystrokeReader() : stdinReader()) : mode === "rpc" ? stdinReader() : null;
   const onSignal = (signal) => {
     if (signalled) return;
     signalled = signal;
@@ -236,7 +248,12 @@ async function main() {
   process.on("SIGTERM", () => onSignal("SIGTERM"));
   process.on("SIGINT", () => onSignal("SIGINT"));
   try {
-    if (tui) {
+    if (tui && piScreen) {
+      const screenRun = await piScreenRun(parts, argsFor, { shouldStop: () => signalled !== null });
+      // pi's own numbers, from pi-durable's committed state: what the run admitted, cancelled, and
+      // why pi's key table said to leave. The theme name is pi's setting plus pi's discovered record.
+      console.error(`screen: pi's chat viewport over pi-durable's entries paints=${screenRun?.paints ?? 0} submitted=${screenRun?.submitted ?? 0} cancelled=${screenRun?.cancelled ?? 0} quit=${screenRun?.quit ?? "-"} theme=${screenRun?.theme ?? "pi's builtin"}`);
+    } else if (tui) {
       const tuiRun = await writerTui(parts, argsFor, reader, { keystrokes: interactive });
       // Naming the palette pi supplied, so a demo can assert pi's colours reached the rows above rather
       // than trusting the frame look right: the token NAMES (accent, borderMuted) are pi's theme file's.
@@ -398,9 +415,37 @@ function piThemeOf(parts) {
   return (parts.resources?.themes ?? []).find((theme) => theme?.name === name) ?? null;
 }
 
+/** pi's OWN screen over the conversation THIS process owns: pi's chat-viewport layout (re-derived in
+ * src/tui/piscreen.mjs because `createChatViewport` is not root-exported at this pin), pi's components
+ * over pi-durable's committed entries, pi's `CustomEditor` as the dock, pi's footer shape, pi's startup
+ * header, pi's discovered palette. pi-tui reads the terminal and pi's keybinding layer decides what a
+ * keystroke means; the only decision made here is which finished pi draft becomes ONE pi-durable
+ * admission through `writerSubmit` (the same mutation line every other surface uses).
+ */
+async function piScreenRun(parts, args, { shouldStop = null } = {}) {
+  const ui = new TuiAltScreen(new ProcessTerminal(), false, undefined);
+  ui.start();
+  // A terminal that reports its size answers it; a terminal that reports NOTHING (Node says `0`, not
+  // `undefined`, when the kernel's winsize was never set - an allocated pty, or a piped stdout) falls
+  // back to the caller's `--width`/`--height`, then to pi-tui's own documented default of 80x24. `??`
+  // would keep the 0 and paint a frame zero columns wide.
+  const size = () => ({ columns: process.stdout.columns || args.width || 80, rows: process.stdout.rows || args.height || 24 });
+  // `shouldStop` is what makes a shutdown signal leave the pi screen: pi's keybinding layer names the
+  // keystroke quits (ESC/ctrl+d/ctrl+c) but a signal is not a keystroke, so the session's signal handler
+  // (already installed in main) says when it was set, and this loop leaves so main's finally block
+  // settles, closes the Harness and releases the claim - the same ordinary cleanup a quit runs.
+  const tally = await piDockLoop({ parts, ui, size, context: parts.context, reader: null, shouldStop });
+  ui.clear();
+  ui.requestRender();
+  ui.stop();
+  return tally;
+}
+
 async function writerTui(parts, args, reader, { keystrokes = false } = {}) {
   const view = await openWriterView(parts, { conversationId: parts.conversation.id, context: parts.context });
-  const size = () => ({ columns: process.stdout.columns ?? args.width ?? 80, rows: process.stdout.rows ?? args.height ?? 24 });
+  // Same size rule as piScreenRun: `0` means the terminal never said a size, so it falls back rather
+  // than painting a frame zero columns wide.
+  const size = () => ({ columns: process.stdout.columns || args.width || 80, rows: process.stdout.rows || args.height || 24 });
   // The wiring order is pi's own, read from the pinned dist: dist/cli/startup-ui.js builds
   // `new TuiMainScreen(new ProcessTerminal(), ..., getAgentDir())` and the screens answer `clear()`,
   // `addChild`, `invalidate()`, `requestRender()`, `stop()`. No escape sequence and no alt-screen

@@ -37,7 +37,7 @@ npm run cli -- --store run.sqlite -p "hi"  # npm swallows its OWN flags, so harn
 node cli.mjs -p "hello"                    # print mode: stdout is the final answer text only
 node cli.mjs --mode json -p "hello"        # NDJSON: pi's session header + event records (docs/json.md)
 node cli.mjs --mode rpc                    # pi's protocol: {"type":"prompt",...} in, {"type":"response",...} out
-node cli.mjs --tui                          # the interactive TUI over the session THIS process owns
+node cli.mjs --tui                          # pi's ROW surface instead of the window (`--row-view` spells it out)
 node demo/tui-interactive.mjs --store harness.sqlite --writer-socket <the owner's socket>  # a viewer of someone else's session
 ```
 
@@ -50,6 +50,26 @@ command the README actually tells a terminal user to type — `npm run cli -- --
 documented pass-through form — and asserts that run opens the same window, paints pi's theme, and commits
 the typed line exactly once on the store IT owned. The pty is a kernel object, not a socket, so the demo
 stays inside the offline proof.
+
+What that window paints is pi's own UI, not a harness drawing: pi-tui's `TuiAltScreen` carries a `ScrollView`
+over the transcript document, pi's message components (`UserMessageComponent`, `AssistantMessageComponent`,
+`ToolExecutionComponent` redrawn through `updateArgs`/`updateResult`, `CompactionSummaryMessageComponent`,
+`SkillInvocationMessageComponent`, `CustomMessageComponent`) draw pi-durable's committed entries one per
+entry, pi's `CustomEditor` over pi-tui's `KeybindingsManager` is the input dock, and pi's `FooterComponent`
+prints pwd · branch · tokens · cache · cost · context%/contextWindow · model · thinking from pi-durable's
+own committed usage. Its startup header is pi's exported pieces — pi's `CURRENT_SESSION_VERSION` inside a
+pi-tui `Box` and pi's `keyHint` lines over pi-tui's keybinding names — and then says, in pi's own palette,
+what this run actually is: `pi-durable session (this harness's node-sqlite store, not a pi session)`, and
+the database this session reads and writes as a URL — `file:///…/run.sqlite (node-sqlite)`, spelled with
+node:url's `pathToFileURL` over the same resolved path pi-durable's ONE storage opener was handed, so the
+line names the store THIS invocation opened rather than a path a reader guesses, and pi-durable's own
+session marker keeps it visibly distinct from pi's own sessions (which are JSONL files under a session dir).
+A `--no-session` run says its state is in memory instead of pointing at a file it never wrote. The row
+surface — pi-tui's `TuiMainScreen` painting the frames the headless fixtures assert — stays reachable
+through `--tui`/`--row-view`. `demo/piscreen.test.mjs` (41 checks) proves the viewport, its clipping and
+pi's components against pi-tui's own painted bytes; `demo/pieditor.test.mjs` (29 checks) proves the typed
+draft reaches pi's `onSubmit`, and that the painted header carries the marker and one painted row carries
+the URL of the store the test claimed; `demo/tty.test.mjs` (15 checks) asserts both lines inside a real pty.
 
 Every surface also prints its own plane inventory on stderr (`plane: packages=… extensions=… loaded=…
 bridged=… templates=… skills=… themes=… theme=… skipped=…`), counted from what THIS run loaded, plus a
@@ -164,8 +184,8 @@ ledger separate from pi-durable's usage plane, and classifies endpoints (loopbac
 
 The pi package ecosystem is reused through pi's own library exports, and every capability pi has that
 pi-durable does not is **named** rather than quietly dropped: [docs/package-support.md](docs/package-support.md)
-is generated from `src/packages/matrix.mjs` by `scripts/render-matrix.mjs` — 102 rows
-(11 native / 39 shimmed / 52 unsupported), evidence per row, plus the packages actually installed on
+is generated from `src/packages/matrix.mjs` by `scripts/render-matrix.mjs` — 115 rows
+(15 native / 44 shimmed / 56 unsupported), evidence per row, plus the packages actually installed on
 this machine and what loaded from them. `src/packages/loader.mjs` uses pi's `DefaultResourceLoader`,
 `discoverAndLoadExtensions` and `loadProjectContextFiles`; `src/packages/adapter.mjs` maps pi's
 `registerTool`, `tool_call`/`tool_result`/provider/compaction handlers, skills, prompts, themes and

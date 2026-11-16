@@ -25,6 +25,8 @@
 import { Container } from "@earendil-works/pi-tui";
 import { CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { pathToFileURL } from "node:url";
+import { resolve } from "node:path";
 import { transcript } from "../core.mjs";
 import { createSyncState, openWatch, snapshotSync } from "./sync.mjs";
 import { writerSubmit } from "./writer.mjs";
@@ -46,11 +48,36 @@ export function piRunThemeOf(parts) {
  return theme?.name ?? name;
 }
 
-/** pi's startup header rows for this run: pi's version constant, pi's model record line, the pi
- * packages this run's plane loaded, and pi's key hints spelled from pi-tui's own keybinding names. */
-function piRunHeader(parts) {
+/** What store THIS run's session lives in, spelled as a URL. pi-durable's storage opener is
+ * `openNodeSqliteStorage(absolutePath)` (dist/storage/storage.d.ts' SqliteStorage), the path it was
+ * handed is `parts.intent.store`, and pi-durable exposes NO storage URL accessor at this pin - so the
+ * `file://` form is Node's OWN `pathToFileURL` over the resolved path - the same `resolve()` pi-durable's
+ * opener uses (core.mjs: `openNodeSqliteStorage(resolve(storePath))`) - never a scheme typed here. A
+ * `--no-session` run opened pi-durable's in-memory Session (parts.backend "memory"), which has no URL
+ * to name, so it says so instead of pointing at a file the run never wrote.
+ */
+export function piSessionLines(parts) {
+ const store = parts?.intent?.store ?? null;
+ const backend = parts?.backend ?? null;
+ if (backend === "memory" || !store) {
+  return { session: "pi-durable session in memory (no store file written; pi's own sessions are JSONL files)", store: null, backend };
+ }
+ return {
+  session: `pi-durable session (this harness's ${backend} store, not a pi session)`,
+  store: `${pathToFileURL(resolve(store))} (${backend})`,
+  backend,
+ };
+}
+
+/** pi's startup header rows for this run: pi's version constant, the pi-durable-session marker over
+ * pi-durable's ONE store (with its URL), pi's model record line, the pi packages this run's plane
+ * loaded, and pi's key hints spelled from pi-tui's own keybinding names. The store lines describe the
+ * open THIS invocation made, so the marker cannot name a store another process owns.
+ */
+export function piRunHeader(parts) {
  const version = CURRENT_SESSION_VERSION;
  const model = piModelOf(parts);
+ const session = piSessionLines(parts);
  const resources = [
   ...(parts?.resources?.packages ?? []).map((found) => `package ${String(found?.name ?? found?.package ?? "")}`),
   ...(parts?.resources?.skills ?? []).map((skill) => `skill ${String(skill?.name ?? "")}`),
@@ -58,7 +85,8 @@ function piRunHeader(parts) {
  ];
  const at = parts?.intent?.cwd ?? parts?.cwd ?? null;
  return {
-  header: piHeaderOf({ version, modelLine: `${model.provider}/${model.id}`, resources: resources.slice(0, 6), hints: [["tui.input.submit", "to send the draft"], ["tui.input.newLine", "to add a line"], ["tui.editor.undo", "to undo"]] }),
+  header: piHeaderOf({ version, modelLine: `${model.provider}/${model.id}`, resources: resources.slice(0, 6), sessionLine: session.session, storeLine: session.store, hints: [["tui.input.submit", "to send the draft"], ["tui.input.newLine", "to add a line"], ["tui.editor.undo", "to undo"]] }),
+  session,
  };
 }
 
@@ -101,6 +129,7 @@ export async function piDockLoop({
  settleMs = 40,
  repaint = null,
  quitWords = ["q", "quit", "exit"],
+ shouldStop = null,
 }) {
  const submitDraft = submit ?? ((text, ctx) => writerSubmit(parts, text, { context: ctx }));
  const say = report ?? ((line) => process.stderr.write(`${line}\n`));
@@ -221,6 +250,10 @@ export async function piDockLoop({
    await new Promise((sleep) => setTimeout(sleep, settleMs));
    noteCaret();
    if (await drain()) break;
+   // A shutdown signal is NOT a keystroke, so pi's keybinding layer cannot name it: the caller says
+   // when the session was asked to stop, and this loop leaves so the caller's ordinary cleanup (close
+   // the Harness, release the claim) runs instead of a hard kill that leaves a stale lock.
+   if (shouldStop?.() === true) { quit.word = quit.word ?? "signal"; break; }
    await paint();
   }
  }

@@ -7,7 +7,9 @@
 // keystrokes through a PIPE (`--keystroke-input`), which proves the driver's logic but cannot prove
 // `process.stdin.isTTY` is true, that raw mode is what a terminal actually hands the driver, or that
 // the surface CHOSEN for a terminal run is the window rather than print mode. Those claims need a real
-// terminal allocation, so this demo allocates one.
+// terminal allocation, so this demo allocates one. It also checks the CONTRAST: the SAME command with
+// `--row-view` spelled out keeps the harness's flat row surface, and the SAME command with piped stdin
+// chooses print instead - the three surfaces a user can reach are therefore deliberate, not accidental.
 //
 // WHY python3 IS USED FOR ONE THING: Node has no pty primitive and this repo must not add a
 // dependency for a test. python3's standard-library `pty` module allocates the terminal - the code
@@ -28,29 +30,47 @@ const CLI = join(ROOT, "cli.mjs");
 
 // One pty allocation: argv in, feeds typed as hex so the CR keystrokes survive copy-paste edits.
 const PY = String.raw`
-import json, os, pty, tty, subprocess, select, sys, time
+import json, os, pty, tty, subprocess, select, sys, time, signal
 argv = json.loads(sys.argv[1]); feeds = [bytes.fromhex(x) for x in sys.argv[2].split(",")]
 master, slave = pty.openpty()
 proc = subprocess.Popen(argv, stdin=slave, stdout=slave, stderr=slave, preexec_fn=lambda: tty.setraw(slave))
 os.close(slave)
 out = b""; sent = 0; t0 = time.time()
-while time.time() - t0 < 30:
+# Feed the keystrokes, reading whatever the child paints, and stop as soon as the child leaves.
+while time.time() - t0 < 20:
   try:
     if select.select([master], [], [], 0.2)[0]:
       chunk = os.read(master, 65536)
       if not chunk: break
       out += chunk
   except OSError: break
-  if sent < len(feeds):
+  # pi-tui's start() negotiates the keyboard protocol and raw mode before any keystroke is taken;
+  # a human's first keystroke always arrives after that, so the feeds wait for the first paint.
+  if sent < len(feeds) and time.time() - t0 > 1.5:
     os.write(master, feeds[sent]); sent += 1
   if proc.poll() is not None: break
-try:
-  while True:
-    chunk = os.read(master, 65536)
-    if not chunk: break
-    out += chunk
-except OSError: pass
-sys.stdout.write(json.dumps({"exit": proc.wait(timeout=10), "stream": out.decode("utf-8", "replace")}))
+# Still alive after the feeds: send the ordinary interrupt, which the child handles by running its
+# normal cleanup (release the claim, close the Harness) - never a kill-9 that skips cleanup.
+if proc.poll() is None:
+  proc.send_signal(signal.SIGTERM)
+  t0 = time.time()
+  while time.time() - t0 < 6 and proc.poll() is None:
+    try:
+      if select.select([master], [], [], 0.1)[0]:
+        chunk = os.read(master, 65536)
+        if not chunk: break
+        out += chunk
+    except OSError: break
+# Bounded drain only: an unbounded os.read here waits forever when the child already left.
+t0 = time.time()
+while time.time() - t0 < 3:
+  try:
+    if select.select([master], [], [], 0.1)[0]:
+      chunk = os.read(master, 65536)
+      if not chunk: break
+      out += chunk
+  except OSError: break
+sys.stdout.write(json.dumps({"exit": proc.wait(timeout=5), "stream": out.decode("utf-8", "replace")}))
 `.trim();
 
 async function awaitExit(child) {
@@ -76,7 +96,7 @@ async function inTerminal(argv, feeds) {
  child.stdout.on("data", (chunk) => { out += chunk.toString(); });
  child.stderr.on("data", (chunk) => { err += chunk.toString(); });
  await awaitExit(child);
- if (child.exitCode !== 0) return { exit: null, stream: "", error: `pty helper exited ${exit}: ${err.slice(0, 200)}` };
+ if (child.exitCode !== 0) return { exit: null, stream: "", error: `pty helper exited ${child.exitCode}: ${err.slice(0, 200)}` };
  try {
   const parsed = JSON.parse(out);
   return { exit: parsed.exit, stream: parsed.stream, error: null };
@@ -100,9 +120,18 @@ async function main() {
  record(term.stream.includes("plane:"),
   "the terminal run prints its own plane inventory before drawing, naming pi's packages and pi's theme",
   `plane=${(term.stream.match(/plane: [^\r\n]*/) ?? [""])[0].slice(0, 180)}`);
- record(term.stream.includes("theme:"),
-  "the terminal run paints rows with pi's discovered theme (its own report names the palette it used)",
-  `theme=${(term.stream.match(/theme: [^\r\n]*/) ?? [""])[0].slice(0, 120)}`);
+ record(term.stream.includes("pi-durable session"),
+  "the terminal's startup screen says this is a pi-durable session, not a regular pi session",
+  `marker=${(term.stream.match(/pi-durable session [^\r\n]*/) ?? [""])[0].slice(0, 140)}`);
+ record(term.stream.includes("file://"),
+  "the startup screen names the database this session opened, as a file:// URL over the store path",
+  `storeUrl=${(term.stream.match(/file:\/\/[^\r\n]*/) ?? [""])[0].slice(0, 140)}`);
+ record(term.stream.includes("screen: pi's chat viewport"),
+  "the terminal run reports its own screen summary, which only the pi-style window prints",
+  `screen=${(term.stream.match(/screen: [^\r\n]*/) ?? [""])[0].slice(0, 200)}`);
+ record(/theme=(?!pi's builtin)/.test(term.stream),
+  "the terminal run paints with pi's discovered theme (its own report names the palette it used)",
+  `theme=${(term.stream.match(/theme=[^\r\n]*/) ?? [""])[0].slice(0, 120)}`);
  record(term.stream.includes("submitted:"),
   "the terminal's typed line reached the session this process owns (the window acknowledged the submission)",
   `acks=${term.stream.split(/\r|\n/).filter((l) => l.includes("submitted:")).length}`);
@@ -141,6 +170,19 @@ async function main() {
   record(npmReopen.exit === 0 && npmEnds.length === 1,
    "the line typed into `npm run cli` is committed exactly once on the store that run owned",
    `typed rows=${npmEnds.length}`);
+
+ // The row surface stays reachable, spelled out: the SAME terminal run with `--row-view` gets the
+ // harness's flat rows (its own header words and its own input mark), not pi's window - which is what
+ // keeps the headless fixtures (demo/tui.test.mjs) and a terminal user on the same deliberate choice.
+ const rowStore = join(dir, "rows.sqlite");
+ const rowTerm = await inTerminal(["node", CLI, "--store", rowStore, "--cwd", dir, "--faux", "the row answer", "--row-view"],
+  [Buffer.from(`${typed} as a row\r`).toString("hex"), Buffer.from("quit\r").toString("hex")]);
+ record(rowTerm.error === null && rowTerm.exit === 0 && rowTerm.stream.includes("durable transcript") && rowTerm.stream.includes("watch frames"),
+  "`--row-view` in a terminal keeps the harness's flat row surface (its header words and its footer words)",
+  `exit=${rowTerm.exit} header=${rowTerm.stream.includes("durable transcript")} footer=${rowTerm.stream.includes("watch frames")}`);
+ record(!rowTerm.stream.includes("screen: pi's chat viewport"),
+  "the row surface prints no pi-window summary, so the flag selects a surface rather than decorating one",
+  `window=${rowTerm.stream.includes("screen: pi's chat viewport")}`);
 
  // The contrast that makes the TTY rule mean something: the SAME command with stdin piped is print
  // (and errors, since no prompt was given) - so `npm run cli` in a terminal and piped in a script

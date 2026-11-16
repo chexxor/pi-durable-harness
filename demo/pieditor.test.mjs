@@ -22,13 +22,14 @@
 // inside the offline proof (pi-ai's faux plane answers; no provider endpoint is contacted).
 import { spawn } from "node:child_process";
 import { mkdtempSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { tmpdir } from "node:os";
 
 import { claimWriter, releaseWriter, readOwner } from "../src/ownership.mjs";
 import { harnessInvocation, settleInvocation } from "../src/cli-intent.mjs";
 import { openStore, readEntries, listConversations } from "../src/readapi.mjs";
-import { piDockLoop } from "../src/tui/pidockloop.mjs";
+import { piDockLoop, piRunHeader, piSessionLines } from "../src/tui/pidockloop.mjs";
 import { entryText } from "../src/tui/piscreen.mjs";
 import { scriptTurn } from "../src/core.mjs";
 import { Container, TuiAltScreen, stripTerminalSequences } from "@earendil-works/pi-tui";
@@ -253,6 +254,24 @@ async function main() {
  record(tally.history.includes("the settled question"),
   "pi's Editor history seed is pi-durable's committed user entries, not a remembered list",
   `history=${JSON.stringify(tally.history)}`);
+
+ // 7b) the startup header says WHICH session this is, and names the store it reads/writes. Both lines
+ // are derived inside pidockloop.mjs from what THIS invocation opened (parts.intent.store + parts.backend),
+ // so the check below compares the paint against the same store path the run claimed - the test typed no
+ // header string of its own, and an in-memory run gets an honest line rather than a made-up path.
+ const session = piSessionLines(parts);
+ const storeUrl = String(pathToFileURL(resolve(store)));
+ record(paintedText.includes("pi-durable session") && paintedRows.some((row) => row.includes("not a pi session")),
+  "the pi-style startup screen marks this as a pi-durable session, distinct from pi's own startup header",
+  `marker=${JSON.stringify(session.session)} rows=${paintedRows.filter((row) => row.includes("pi-durable session")).length}`);
+ record(paintedRows.some((row) => row.includes(storeUrl)),
+  "the startup screen names the database this session reads/writes: a file:// URL over the store THIS process claimed",
+  `storeUrl=${storeUrl} claimed=${resolve(store)}`);
+ const memoryParts = await harnessInvocation({ noSession: true, cwd: dir, faux: marker, messages: [] }, { context: BACKGROUND_CONTEXT });
+ const memory = piSessionLines(memoryParts);
+ record(memoryParts.backend === "memory" && memory.store === null && memory.session.includes("in memory"),
+  "a --no-session run says its session is in memory instead of naming a store file it never wrote",
+  `backend=${memoryParts.backend} storeLine=${JSON.stringify(memory.store)} session=${JSON.stringify(memory.session)}`);
 
  // 8) the exit keys run the ORDINARY cleanup, which releases ownership.
  const ctrlDRun = await piDockLoop({ parts, ui, size: () => ({ columns: WIDTH, rows: TALL }), context: BACKGROUND_CONTEXT, keystrokes: true, reader: () => ["\u0004"], report: (line) => process.stderr.write(`${line}\n`) });

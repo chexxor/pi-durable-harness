@@ -415,11 +415,17 @@ export function piStatusRows(live, { width = Infinity } = {}) {
  * text is not exported at this pin - a row in src/packages/matrix.mjs says so). pi's own version
  * constant, pi's `Box` border piece, and pi-tui's own keybinding names through pi's `keyHint` are pi's;
  * the colours are pi's installed palette, and no hue is invented here. */
-export function piHeaderOf({ version, modelLine = null, resources = [], hints = [["tui.input.submit", "to send the draft"], ["tui.input.newLine", "to add a line"], ["tui.editor.undo", "to undo"]] }) {
+export function piHeaderOf({ version, modelLine = null, resources = [], sessionLine = null, storeLine = null, hints = [["tui.input.submit", "to send the draft"], ["tui.input.newLine", "to add a line"], ["tui.editor.undo", "to undo"]] }) {
  const lines = [];
  const title = new Box(1, 1, (text) => piColour("accent", text));
  title.addChild(new Text(`pi-durable harness ${version}`, 0, 0));
  lines.push(title);
+ // The marker a user needs on the startup screen: pi's own header words would otherwise read exactly
+ // like a plain pi session, and this run is NOT one - its state is pi-durable's committed entries in
+ // ONE store file, not pi's session JSONL under a session dir. Both lines are supplied by the caller
+ // from what THIS run opened, so nothing here claims a store the run did not open.
+ if (sessionLine) lines.push(new Text(piColour("accent", sessionLine), 0, 0));
+ if (storeLine) lines.push(new Text(piColour("muted", storeLine), 0, 0));
  lines.push(new Text(piColour("muted", `model ${modelLine ?? "no model"}`), 0, 0));
  for (const resource of resources) lines.push(new Text(piColour("dim", resource), 0, 0));
  for (const [keybinding, description] of hints) lines.push(new Text(piColour("dim", keyHint(keybinding, description)), 0, 0));
