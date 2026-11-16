@@ -101,12 +101,11 @@ export async function listConversations(store, options = {}) {
  * @temp: the point of this helper is that the viewer never rebuilds usage from entries; pi-durable
  * @temp: keeps the numbers, and this file only hands them over.
  */
-export async function usage(store, conversationId = null, options = {}) {
+export async function usage(store, options = {}) {
 	const { context = BACKGROUND_CONTEXT } = options;
-	// usage() is Harness-level and conversation-scoped; a conversation-less usage read is the whole
-	// store's ledger, which is what a viewer wants when it does not know the ids yet.
-	if (conversationId === null) return await store.harness.usage(context);
-	const conversation = await store.harness.conversation(conversationId, context);
-	if (!conversation) throw new Error(`no conversation ${conversationId} in this store`);
-	return await conversation.usage(context);
+	// pi-durable's usage read is Harness-level: dist/harness/harness.d.ts `usage(context): Promise<UsageState>`,
+	// documented as "Session total: every conversation's `pi.usage` summed". There is no conversation-scoped
+	// usage method at this pin (dist's Conversation surface has no `usage`), so the store's ledger is the read,
+	// and a caller that wants one conversation's numbers filters the buckets it cares about.
+	return await store.harness.usage(context);
 }
