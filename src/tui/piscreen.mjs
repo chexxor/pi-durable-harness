@@ -277,21 +277,39 @@ function textOf(message) {
 
 /** pi's transcript document: pi's ScrollView follows the END of its document, so the rows must be
  * appended OLDEST first, while pi-durable's `entries` read returns NEWEST first (dist/entries.d.ts
- * pages are newest-first). One place owns that reversal so every surface gets the same order. */
+ * pages are newest-first). One place owns that reversal so every surface gets the same order.
+ *
+ * pi also separates its chat rows with pi-tui's `Spacer`: `addMessageToChat` (dist/modes/interactive/
+ * interactive-mode.js) does `this.chatContainer.addChild(new Spacer(1))` before a `case "user"` row ONLY
+ * when `this.chatContainer.children.length > 0`, and BEFORE a `case "compactionSummary"` / `case "branchSummary"`
+ * row UNCONDITIONALLY. `appended` counts pi's chat rows only - pi's header lives in its own
+ * headerContainer, so the first committed entry gets no spacer even under a painted header. */
 export function piTranscriptDocument({ entries, ui, cwd = null, markdownTheme = piMarkdownTheme(), pendingTools = {}, outputPad = 1, prepend = [] }) {
  const document = new Container();
  const classOf = {};
+ let spacers = 0;
  // pi prints its startup header INTO the transcript, oldest-first, so a header component goes in BEFORE
  // the committed entries and scrolls up and out of the way as the session grows.
  for (const component of prepend) document.addChild(component);
+ let appended = 0;
  for (const entry of [...entries].reverse()) {
-  for (const component of piEntryComponents(entry, { ui, cwd, markdownTheme, pendingTools, outputPad })) {
+  const components = piEntryComponents(entry, { ui, cwd, markdownTheme, pendingTools, outputPad });
+  if (!components.length) continue;
+  if (entry?.kind === CompactionEntry.kind) {
+   document.addChild(new Spacer(1));
+   spacers += 1;
+  } else if (entry?.kind === UserEntry.kind && appended > 0) {
+   document.addChild(new Spacer(1));
+   spacers += 1;
+  }
+  for (const component of components) {
    const name = component.constructor?.name ?? "?";
    classOf[name] = (classOf[name] ?? 0) + 1;
    document.addChild(component);
+   appended += 1;
   }
  }
- return { document, classOf };
+ return { document, classOf, spacers };
 }
 
 /** pi's chat viewport: pi's `createChatViewport` (chat-viewport.js) re-derived at this pin. */
@@ -320,7 +338,10 @@ export function piContextOf(entries, models, ref) {
  for (const entry of entries) for (const message of Array.isArray(entry?.model) ? entry.model : []) {
   if (message?.usage) tokens += calculateContextTokens(message.usage);
  }
- const window = models?.getModel?.(ref?.provider, ref?.model ?? ref?.modelId)?.contextWindow ?? 0;
+ // `ref` is either pi-durable's model reference ({provider, model|modelId}) or this file's own
+ // piModelOf() answer ({id, provider, contextWindow}), so both name shapes are resolved here, and the
+ // window is pi's ModelRecord's (falling back to the record already carried, never a guessed size).
+ const window = models?.getModel?.(ref?.provider, ref?.model ?? ref?.modelId ?? ref?.id)?.contextWindow ?? ref?.contextWindow ?? 0;
  return { tokens, contextWindow: window, percent: window ? Math.round((tokens / window) * 1000) / 10 : 0 };
 }
 
@@ -331,8 +352,13 @@ export function piContextOf(entries, models, ref) {
 export function piModelOf(parts) {
  const ref = parts?.intent?.model ? { provider: parts.intent.provider ?? "faux", model: parts.intent.model }
   : parts?.modelRef ?? parts?.agent?.model ?? { provider: "faux", model: "faux-1" };
- const record = parts?.models?.getModel?.(ref.provider, ref.model) ?? null;
- return { id: String(ref.model ?? ref.modelId ?? ""), provider: String(ref.provider ?? ""), contextWindow: record?.contextWindow ?? 0, reasoning: record?.reasoning ?? false };
+ // pi-durable's ModelRef names a model with `modelId` (dist/harness/types.d.ts), pi's own `--model` flag
+ // says `model`, and this file's own answer says `id`, so all three spellings resolve here - and the
+ // window is pi's ModelRecord's, never a size typed here.
+ const modelId = String(ref.model ?? ref.modelId ?? ref.id ?? "");
+ const provider = String(ref.provider ?? "");
+ const record = parts?.models?.getModel?.(provider, modelId) ?? null;
+ return { id: modelId, provider, contextWindow: record?.contextWindow ?? 0, reasoning: record?.reasoning ?? false };
 }
 
 /** The branch pi's footer shows, read from the run cwd's own `.git/HEAD` (a data read of pi's own
@@ -348,19 +374,46 @@ export function piGitBranchOf(cwd) {
  }
 }
 
+/** pi's entry SHAPES, which are not pi-durable's: pi's FooterComponent totals ONLY the rows its own
+ * session file has (dist/modes/interactive/components/footer.js `getSessionStats()`): `{type:"usage"}`
+ * with a `usage`, `{type:"message", message}` when `message.role` is "assistant" or "toolResult" and the
+ * message carries `usage`, and `{type:"branch_summary"|"compaction"}` with a `usage`. pi-durable's `EntryRecord`
+ * (dist/types.d.ts) is `{id, conversationId, kind, model, data, head, edits, byTaskId}` - no `type`, no
+ * `message` - so pi's totals would stay 0 if raw entries were handed over. THIS is the one read-only mapper
+ * that changes the shape (no storage, no mutation, pi-durable's numbers unchanged): pi-durable's newest-first
+ * page becomes pi's oldest-first list, each entry's pi-ai messages become `{type:"message"}` rows carrying
+ * pi-durable's own `usage` record, and pi-durable's `pi.compaction` entry becomes pi's `{type:"compaction"}`
+ * row with NO `usage` field, because pi-durable's CompactionEntry (dist/entries.d.ts) stores only `reason`
+ * plus the wrapped summary while pi-durable files summarization spend in its OWN `pi.usage` ledger
+ * (dist/harness/usage.d.ts: "Assistant entries and summarization attempts") - so pi's footer counts exactly
+ * the model messages pi-durable committed, which demo/piscreen.test.mjs checks against that ledger.
+ * Nothing here is invented: pi's `{type:"usage"}` row has no pi-durable counterpart (pi-durable's `pi.usage`
+ * is a ConversationDocToken, not an entry), so no such row is fabricated.
+ */
+export function piSessionEntriesOf(entries) {
+ const rows = [];
+ for (const entry of [...entries].reverse()) {
+  for (const message of Array.isArray(entry?.model) ? entry.model : []) rows.push({ type: "message", message });
+  if (entry?.kind === CompactionEntry.kind) rows.push({ type: "compaction" });
+ }
+ return rows;
+}
+
 /** pi's FooterComponent, driven by pi-durable's numbers instead of pi's AgentSession. pi's footer
  * reads exactly these fields (footer.js): `state.model`, `state.thinkingLevel`, `sessionManager.
  * {getEntryCount,getSessionId,getLeafId,getEntries,getCwd,getSessionName}`, `getContextUsage()`,
  * `modelRuntime.isUsingSubscription`, `routedModel`, and footerData's `getGitBranch()`/
  * `getAvailableProviderCount()`. Every value below is pi-durable's or pi's own plane's. */
-export function piFooterOf({ entries, conversationId, leafId, entryCount, cwd, sessionName = null, model = null, routedModel = null, providers = 1, contextUsage = null, thinkingLevel = null, autoCompactEnabled = true, extensionStatuses = new Map(), gitBranch = null, isUsingSubscription = () => false }) {
+export function piFooterOf({ entries: piEntries, conversationId, leafId, entryCount, cwd, sessionName = null, model = null, routedModel = null, providers = 1, contextUsage = null, thinkingLevel = null, autoCompactEnabled = true, extensionStatuses = new Map(), gitBranch = null, isUsingSubscription = () => false }) {
  const session = {
   state: { model, thinkingLevel },
   sessionManager: {
    getEntryCount: () => entryCount,
    getSessionId: () => conversationId,
    getLeafId: () => leafId,
-   getEntries: () => entries,
+    // pi's own totals read the shapes `piSessionEntriesOf` produces; a caller that hands raw pi-durable
+   // entries still paints pi's footer, it just sees no committed usage (pi's session file has `type`s).
+   getEntries: () => piEntries,
    getCwd: () => cwd,
    // pi-durable keeps no session name, so pi's footer omits that part rather than inventing one.
    getSessionName: () => sessionName,

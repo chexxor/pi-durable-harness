@@ -141,6 +141,14 @@ async function inTerminal(argv, feeds) {
  }
 }
 
+async function runCli(argv) {
+ const child = spawn("node", [join(ROOT, "cli.mjs"), ...argv], { cwd: ROOT, stdio: ["pipe", "pipe", "pipe"] });
+ let out = "";
+ child.stdout.on("data", (chunk) => { out += chunk.toString(); });
+ await new Promise((done) => child.once("exit", done));
+ return { exit: child.exitCode, out };
+}
+
 async function main() {
  const dir = mkdtempSync(join(tmpdir(), "dh-pieditor-"));
  const store = join(dir, "s.sqlite");
@@ -224,6 +232,14 @@ async function main() {
   "pi repainted for every keystroke (plus the first empty dock, less the quitting one), so a mid-draft frame is pi's own paint",
   `paints=${tally.paints} keystrokes=${keys.length} layoutRows=${(ui.currentLayout?.lines?.length ?? 0)}`);
 
+ // The footer words, from the SAME paint: the settled turn above committed entries carrying pi-durable's
+ // `usage`, so pi's footer (one word per NON-ZERO committed total) draws pi-durable's numbers rather
+ // than pi's AgentSession totals. The context window comes from pi's ModelRecord, never a size typed here.
+ const footerRows = paintedRows.filter((row) => /[↑↓][0-9]/.test(row) && /[0-9.]+\s*%\s*\/\s*[0-9.]+k/.test(row));
+ record(footerRows.length > 0 && footerRows.every((row) => /[RW][0-9]/.test(row) && /CH[0-9]/.test(row)),
+  "the headless paint carries pi's footer words over pi-durable's COMMITTED usage (↓/↑ tokens, R/W cache, CH rate, x%/window)",
+  `footer=${JSON.stringify(footerRows.slice(0, 2))}`);
+
  // 6) what the paint says about the dock itself.
  const boxRule = "\u2500".repeat(8);
  const caretMarker = "_pi:fc";
@@ -292,6 +308,13 @@ async function main() {
 
  // 9) the same dock under an ALLOCATED terminal, driven by demo/pieditor-interactive.mjs.
  const ptyStore = join(dir, "pty.sqlite");
+ // One SETTLED turn through the ordinary print path first, so the dock's FIRST paint under the
+ // allocated terminal already has committed entries carrying pi-durable's `usage`: pi's footer prints
+ // one word per non-zero committed total, so an empty conversation would legitimately paint none.
+ const seed = await runCli(["--store", ptyStore, "--cwd", dir, "-p", "seed the pty footer", "--faux", "a seeded answer"]);
+ record(seed.exit === 0 && seed.out.includes("a seeded answer"),
+  "the pty run's store carries a settled turn committed through the ordinary print path before the terminal opens",
+  `seedExit=${seed.exit} seedAnswer=${seed.out.trim().slice(0, 60)}`);
  const typedTerminal = "typed in the terminal";
  const ptyRun = await inTerminal(["node", join(ROOT, "demo", "pieditor-interactive.mjs"), "--store", ptyStore, "--cwd", dir, "--faux", marker, "--width", "72", "--height", "20"],
   [Buffer.from(`${typedTerminal}\r`).toString("hex"), Buffer.from("quit\r").toString("hex")]);
@@ -304,6 +327,9 @@ async function main() {
  record(ptyText.includes(boxRule) && ptyText.includes(typedTerminal) && ptyHidden > 0,
   "under a real pty pi's dock drew its borders, echoed the typed keystrokes, and kept pi's own cursor control",
   `rule=${ptyText.includes(boxRule)} typed=${ptyText.includes(typedTerminal)} hiddenCursorFrames=${ptyHidden}`);
+ record(/[0-9.]+\s*%\s*\/\s*[0-9.]+k/.test(ptyText) && /[↑↓][0-9]/.test(ptyText) && /[RW][0-9]/.test(ptyText),
+  "under an allocated terminal pi's footer prints committed-token and cache words plus its context%/contextWindow pair",
+  `words=${JSON.stringify(ptyText.match(/[0-9.]+\s*%\s*\/\s*[0-9.]+k/g)?.slice(0, 2))} arrows=${/[↑↓][0-9]/.test(ptyText)}`);
  record(ptyRun.stream.split(/\r|\n/).filter((line) => line.includes("submitted:")).length === 1,
   "one terminal keystroke line became exactly one submission acknowledged by the dock",
   `acks=${ptyRun.stream.split(/\r|\n/).filter((line) => line.includes("submitted:")).length}`);

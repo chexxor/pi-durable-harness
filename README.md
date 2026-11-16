@@ -45,7 +45,11 @@ That rule is proved against a REAL terminal, not only a pipe: `demo/tty.test.mjs
 (python3's stdlib `pty` module — Node has no pty primitive, and the harness code under test never sees
 python), runs `node cli.mjs` inside it with no prompt and no `--mode`, and asserts the window answered the
 typed line, painted pi's theme, committed the line exactly once on the store it owned, quit on a bare
-`quit` line, and that the SAME command with piped stdin chooses print instead. The demo also drives the
+`quit` line, and that the SAME command with piped stdin chooses print instead. Its store is seeded with one
+SETTLED turn through the ordinary print path first — pi's footer prints one word per non-zero committed
+total, so the words pi draws under the allocated pty are pi-durable's numbers — and the demo checks those
+words (`↓` tokens, `R`/`W` cache, `CH…%`, `x.x%/128k`) and pi's `pwd (branch)` row in the painted stream, at
+the repo cwd, while the ownership lock stays beside the store in the temp dir. The demo also drives the
 command the README actually tells a terminal user to type — `npm run cli -- --store ... --cwd ...`, npm's
 documented pass-through form — and asserts that run opens the same window, paints pi's theme, and commits
 the typed line exactly once on the store IT owned. The pty is a kernel object, not a socket, so the demo
@@ -57,7 +61,12 @@ over the transcript document, pi's message components (`UserMessageComponent`, `
 `SkillInvocationMessageComponent`, `CustomMessageComponent`) draw pi-durable's committed entries one per
 entry, pi's `CustomEditor` over pi-tui's `KeybindingsManager` is the input dock, and pi's `FooterComponent`
 prints pwd · branch · tokens · cache · cost · context%/contextWindow · model · thinking from pi-durable's
-own committed usage. Its startup header is pi's exported pieces — pi's `CURRENT_SESSION_VERSION` inside a
+committed numbers: pi's own totals read pi's entry SHAPES, which are not pi-durable's EntryRecords, so the
+entries travel through `piSessionEntriesOf` (a read-only shape mapper — pi-durable's numbers are unchanged),
+pi prints ONE WORD PER NON-ZERO committed total (`↓`/`↑` tokens, `R`/`W` cache, `CH…%` cache-hit rate,
+`x.x%/contextWindow`, `$cost`), and this repo's offline faux plane commits `input` and `cost` as 0 — which
+is why pi draws neither the `↑` nor the `$` word there — while the branch comes from `piGitBranchOf(cwd)`
+and no `(auto)` marker appears while pi's settings say compaction is off. Its startup header is pi's exported pieces — pi's `CURRENT_SESSION_VERSION` inside a
 pi-tui `Box` and pi's `keyHint` lines over pi-tui's keybinding names — and then says, in pi's own palette,
 what this run actually is: `pi-durable session (this harness's node-sqlite store, not a pi session)`, and
 the database this session reads and writes as a URL — `file:///…/run.sqlite (node-sqlite)`, spelled with
@@ -66,10 +75,12 @@ line names the store THIS invocation opened rather than a path a reader guesses,
 session marker keeps it visibly distinct from pi's own sessions (which are JSONL files under a session dir).
 A `--no-session` run says its state is in memory instead of pointing at a file it never wrote. The row
 surface — pi-tui's `TuiMainScreen` painting the frames the headless fixtures assert — stays reachable
-through `--tui`/`--row-view`. `demo/piscreen.test.mjs` (41 checks) proves the viewport, its clipping and
-pi's components against pi-tui's own painted bytes; `demo/pieditor.test.mjs` (29 checks) proves the typed
-draft reaches pi's `onSubmit`, and that the painted header carries the marker and one painted row carries
-the URL of the store the test claimed; `demo/tty.test.mjs` (15 checks) asserts both lines inside a real pty.
+through `--tui`/`--row-view`. `demo/piscreen.test.mjs` (46 checks) proves the viewport, its clipping, pi's
+`Spacer` placement and pi's components against pi-tui's own painted bytes; `demo/pieditor.test.mjs` (32 checks)
+proves the typed draft reaches pi's `onSubmit`, that pi's footer words are drawn from pi-durable's committed
+usage in that paint, and that the painted header carries the marker while one painted row carries the URL of
+the store the test claimed; `demo/tty.test.mjs` (21 checks) asserts both lines, pi's `pwd (branch)` footer row
+and pi's committed-total footer words, inside a real allocated pty.
 
 Every surface also prints its own plane inventory on stderr (`plane: packages=… extensions=… loaded=…
 bridged=… templates=… skills=… themes=… theme=… skipped=…`), counted from what THIS run loaded, plus a

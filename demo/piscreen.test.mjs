@@ -49,7 +49,7 @@ import { piSettings } from "../src/settings.mjs";
 import { openStore, usage as readUsage } from "../src/readapi.mjs";
 import { createSyncState, snapshotSync, openWatch } from "../src/tui/sync.mjs";
 import { headerRow, transcriptRows } from "../src/tui/rows.mjs";
-import { entryText, installPiTheme, installPiThemeByName, piEditorDock, piHeaderOf, piLiveRows, piMarkdownTheme, piFooterOf, piScreen, piStatusRows, piTranscriptDocument } from "../src/tui/piscreen.mjs";
+import { entryText, installPiTheme, installPiThemeByName, piContextOf, piEditorDock, piFooterOf, piGitBranchOf, piHeaderOf, piLiveRows, piMarkdownTheme, piModelOf, piScreen, piSessionEntriesOf, piStatusRows, piTranscriptDocument } from "../src/tui/piscreen.mjs";
 import { Container, TuiAltScreen } from "@earendil-works/pi-tui";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 
@@ -94,6 +94,12 @@ async function main() {
  // pi's project settings turn compaction ON for THIS fixture, so a pi.compaction entry exists to render;
  // the user's own workspace says the opposite, and that read is asserted separately below.
  writeFileSync(join(cwd, ".pi", "settings.json"), JSON.stringify({ compaction: { enabled: true, reserveTokens: 1, keepRecentTokens: 1 } }) + "\n");
+ // pi's footer appends ` (${branch})` from its own getGitBranch() probe, whose shipped reader in this
+ // harness is piGitBranchOf() over the RUN CWD's `.git/HEAD`. The fixture cwd is a temp dir, so it gets
+ // its own `.git/HEAD`: the assertion below then runs through the shipped reader rather than a string the
+ // test handed to pi's footer.
+ mkdirSync(join(cwd, ".git"), { recursive: true });
+ writeFileSync(join(cwd, ".git", "HEAD"), "ref: refs/heads/fixture-branch\n");
  writeFileSync(join(cwd, ".pi", "skills", "note-skill", "SKILL.md"), "---\nname: note-skill\ndescription: leave a note\n---\nSay NOTES when asked.\n");
 
  // 1) pi's palette: pi's components read pi's theme from pi's global slots, so install first.
@@ -165,16 +171,24 @@ async function main() {
   `kinds=${JSON.stringify(kinds)}`);
 
  // 3a) the tall pass: everything fits, so pi's own words and borders can be asserted.
+ // pi's footer BEFORE the paint: pi's FooterComponent totals pi's OWN entry shapes, so pi-durable's
+ // committed entries travel through the shipped piSessionEntriesOf() (pi's `{type:"message"}` rows
+// carrying pi-durable's own `usage` records, oldest-first like pi's session file), and the branch comes
+// from the shipped piGitBranchOf() over this fixture cwd's `.git/HEAD`.
  const WIDTH = 72;
  const TALL = 64;
+ const modelOfFooter = piModelOf(plane);
+ const contextUsage = piContextOf(entries, plane.models, modelOfFooter);
+ const tallFooter = footerFor({ entries, plane, conversationId: conversation.id, cwd, model: modelOfFooter });
+ const tallFooterText = (tallFooter.render(WIDTH) ?? []).map((line) => stripTerminalSequences(line)).join("\n");
  const tallSink = [];
  const tallUi = new TuiAltScreen(captureTerminal(WIDTH, TALL, tallSink), false, undefined);
  tallUi.start();
- const tall = await paintPiScreen({ entries, ui: tallUi, sink: tallSink, cwd, markdownTheme });
+ const tall = await paintPiScreen({ entries, ui: tallUi, sink: tallSink, cwd, markdownTheme, footer: tallFooter });
  const shortSink = [];
  const shortUi = new TuiAltScreen(captureTerminal(WIDTH, 12, shortSink), false, undefined);
  shortUi.start();
- const short = await paintPiScreen({ entries, ui: shortUi, sink: shortSink, cwd, markdownTheme });
+ const short = await paintPiScreen({ entries, ui: shortUi, sink: shortSink, cwd, markdownTheme, footer: tallFooter });
  const tallRows = splitPaintedRows(tall.paintedRaw);
 const tallPainted = stripTerminalSequences(tall.paintedRaw);
 const shortPainted = stripTerminalSequences(short.paintedRaw);
@@ -197,6 +211,15 @@ const shortRows = splitPaintedRows(short.paintedRaw);
  record(short.transcript.followEnd && short.transcript.viewportHeight <= 12,
   "pi's ScrollView follows the END of the transcript and reports the terminal's viewport height",
   `followEnd=${short.transcript.followEnd} viewportHeight=${short.transcript.viewportHeight} scrollTop=${shortUi.viewportTop}`);
+ record(tall.spacers >= 1 && short.spacers >= 1,
+  "pi separates its chat rows with pi-tui's Spacer (a row before each compaction box, and before a user row once the chat has rows), so the transcript has blank rows between entries",
+  `spacers=${JSON.stringify({ tall: tall.spacers, short: short.spacers})}`);
+ record(tallRows.some((row) => row.includes("(fixture-branch)")) && tallPainted.includes("(fixture-branch)"),
+  "the PAINTED footer carries pi's pwd + branch line, with the branch piGitBranchOf() read off this cwd's .git/HEAD (pi appends ` (${branch})`)",
+  `branchRow=${JSON.stringify((tallRows.filter((row) => row.includes("(fixture-branch)"))[0] ?? "").slice(0, 90))}`);
+ record(shortRows.some((row) => row.includes("(fixture-branch)")),
+  "the footer survives the CLIPPED 12-row paint as well, so pi's dock keeps the footer row while the transcript scrolls",
+  `rows=${shortRows.length}`);
 
  record(tallPainted.includes("[compaction]") && tallPainted.includes("Compacted from"),
   "pi's CompactionSummaryMessageComponent label and header are in the painted frame");
@@ -240,7 +263,7 @@ const shortRows = splitPaintedRows(short.paintedRaw);
  for (const component of piLiveRows({ live: liveSnap?.live, pendingTools: livePending, ui: liveUi, cwd })) liveDoc.addChild(component);
  const liveStatus = new Container();
  for (const row of piStatusRows(liveSnap?.live)) liveStatus.addChild(row);
- const liveScreen = piScreen({ document: liveDoc, editor: piEditorDock(liveUi), status: liveStatus, scrollbar: "auto" });
+ const liveScreen = piScreen({ document: liveDoc, editor: piEditorDock(liveUi), status: liveStatus, footer: footerFor({ entries: livePaintEntries, plane, conversationId: conversation.id, cwd, model: modelOfFooter }), scrollbar: "auto" });
  liveUi.setLayoutRoot(liveScreen.root);
  liveUi.invalidate();
  liveUi.requestRender();
@@ -276,21 +299,11 @@ const shortRows = splitPaintedRows(short.paintedRaw);
   "pi's ScrollView follows the END of the transcript: the newest committed text is painted, older committed text is not",
   `rows=${shortRows.length} hidden=${hiddenOlder.length} oldest=${JSON.stringify(oldestText.slice(0, 30))} scrollTop=${shortUi.viewportTop} followEnd=${short.transcript.followEnd}`);
 
- // 4) pi's footer, in pi's shape, with pi-durable's numbers.
- const footerEntries = entries.flatMap((entry) => Array.isArray(entry?.model) ? entry.model.map((message) => ({ type: "message", message })) : []);
+ // 4) pi's footer, in pi's shape, with pi-durable's numbers. The component the paint above used is the
+ // one asserted against here, so the word-level checks and the painted rows are the same footer.
  const committedUsage = sumEntryUsage(entries);
- const modelOfFooter = piModelOf(plane);
- const contextUsage = piContextOf(entries, plane);
- const footerComponent = piFooterOf({
-  entries: footerEntries, conversationId: conversation.id, leafId: entries.at(-1)?.id ?? null,
-  entryCount: entries.length, cwd, sessionName: null,
-  model: modelOfFooter, routedModel: null,
-  providers: (plane.models?.getProviders?.() ?? []).length,
-  contextUsage, thinkingLevel: plane.settings?.thinkingLevel ?? null,
-  autoCompactEnabled: plane.settings?.compaction?.enabled === true,
-  gitBranch: gitBranchOf(cwd),
- });
- const footerText = (footerComponent.render(WIDTH) ?? []).map((line) => stripTerminalSequences(line)).join("\n");
+ const footerComponent = tallFooter;
+ const footerText = tallFooterText;
  const viewer = await openStore(storePath);
  const ledger = await readUsage(viewer);
  const ledgerTotals = sumLedger(ledger);
@@ -299,7 +312,7 @@ const shortRows = splitPaintedRows(short.paintedRaw);
  const settledSink = [];
  const settledUi = new TuiAltScreen(captureTerminal(WIDTH, TALL, settledSink), false, undefined);
  settledUi.start();
- const settledScreen = piScreen({ document: settledBuilt.document, editor: piEditorDock(settledUi), status: new Container(), scrollbar: "auto" });
+ const settledScreen = piScreen({ document: settledBuilt.document, editor: piEditorDock(settledUi), status: new Container(), footer: footerFor({ entries: settledEntries, plane, conversationId: conversation.id, cwd, model: modelOfFooter }), scrollbar: "auto" });
  settledUi.setLayoutRoot(settledScreen.root);
  settledUi.invalidate();
  settledUi.requestRender();
@@ -349,11 +362,14 @@ const shortRows = splitPaintedRows(short.paintedRaw);
   "pi's footer prints the cwd the way pi does (home replaced by ~), with pi's own formatCwdForFooter rule",
   `pwd part=${JSON.stringify(footerText.split("\n")[0] ?? "")}`);
  const offFooter = piFooterOf({
-  entries: footerEntries, conversationId: conversation.id, leafId: null, entryCount: entries.length, cwd,
+  entries: piSessionEntriesOf(entries), conversationId: conversation.id, leafId: null, entryCount: entries.length, cwd,
   model: modelOfFooter, providers: 1, contextUsage, thinkingLevel: plane.settings?.thinkingLevel ?? null,
-  autoCompactEnabled: false, gitBranch: gitBranchOf(cwd),
+  autoCompactEnabled: false, gitBranch: piGitBranchOf(cwd),
  });
  const offText = (offFooter.render(WIDTH) ?? []).map((line) => stripTerminalSequences(line)).join("\n");
+ record(piGitBranchOf(cwd) === "fixture-branch" && offText.includes("(fixture-branch)") && tallPainted.includes("(fixture-branch)"),
+  "pi's branch word comes from the shipped piGitBranchOf() over the run cwd's .git/HEAD, not from a value the test typed into pi's footer",
+  `branch=${JSON.stringify(piGitBranchOf(cwd))} off=${offText.includes("(fixture-branch)")}`);
  record(!offText.includes("(auto)") && footerText.includes("(auto)"),
   "pi's '(auto)' marker follows pi's compaction setting: shown while it is ON, absent when the setting says OFF",
   `on=${footerText.includes("(auto)")} off=${offText.includes("(auto)")}`);
@@ -371,11 +387,12 @@ const shortRows = splitPaintedRows(short.paintedRaw);
  await prompt(quiet.conversation, "another question with no compaction", quiet.context);
  scriptTurn(quiet.faux, ["another answer with no compaction"]);
  const quietEntries = await transcript(quiet.conversation, quiet.context, 50);
+ const quietContextUsage = piContextOf(quietEntries, plane.models, modelOfFooter);
  const quietFooter = piFooterOf({
-  entries: quietEntries.flatMap((entry) => Array.isArray(entry?.model) ? entry.model.map((message) => ({ type: "message", message })) : []),
+  entries: piSessionEntriesOf(quietEntries),
   conversationId: quiet.conversation.id, leafId: quietEntries.at(-1)?.id ?? null, entryCount: quietEntries.length,
-  cwd, sessionName: null, model: modelOfFooter, providers: 1, contextUsage: piContextOf(quietEntries, plane),
-  thinkingLevel: plane.settings?.thinkingLevel ?? null, autoCompactEnabled: true, gitBranch: null,
+  cwd, sessionName: null, model: modelOfFooter, providers: 1, contextUsage: quietContextUsage,
+  thinkingLevel: plane.settings?.thinkingLevel ?? null, autoCompactEnabled: true, gitBranch: piGitBranchOf(cwd),
  });
  const quietFooterText = (quietFooter.render(WIDTH) ?? []).map((line) => stripTerminalSequences(line)).join("\n");
  const quietViewer = await openStore(quietStore);
@@ -389,6 +406,9 @@ record(quietCommitted.input === quietTotals.input && quietCommitted.output === q
  record(tokenFields.filter(([field,]) => quietTotals[field] !== 0).every(([field, marker]) => quietFooterText.includes(`${marker}${piTokenText(quietTotals[field])}`)),
   "pi's footer prints pi-durable's read-back numbers for the quiet session in pi's own format",
   `footer=${JSON.stringify(quietFooterText.split("\n"))}`);
+ record(quietFooterText.includes("(fixture-branch)") && quietFooterText.includes(`${quietContextUsage.percent.toFixed(1)}%/${piTokenText(quietContextUsage.contextWindow)}`) && quietFooterText.includes("(auto)"),
+  "the quiet session's footer names the branch, pi's context%/contextWindow pair over pi-durable's committed usage, and pi's (auto) marker because THIS fixture asked for auto-compaction",
+  `percent=${quietContextUsage.percent.toFixed(1)} window=${quietContextUsage.contextWindow} branch=${JSON.stringify(piGitBranchOf(cwd))}`);
 
  // 5) pi's startup header pieces.
  const header = piHeaderOf({ version: CURRENT_SESSION_VERSION, modelLine: `${modelOfFooter.provider}/${modelOfFooter.id}`, resources: [`${plane.packages?.found?.length ?? 0} pi packages`] });
@@ -410,8 +430,9 @@ record(quietCommitted.input === quietTotals.input && quietCommitted.output === q
  process.exitCode = failed.length ? 1 : 0;
 }
 
-/** One pass of pi's screen: pi's components over pi-durable's entries, inside pi's layout, painted. */
-async function paintPiScreen({ entries, ui, sink, cwd, markdownTheme }) {
+/** One pass of pi's screen: pi's components over pi-durable's entries, inside pi's layout, painted,
+ * WITH pi's footer row (the shipped path draws it, so the painted bytes have to carry it). */
+async function paintPiScreen({ entries, ui, sink, cwd, markdownTheme, footer = null }) {
  const pendingTools = {};
  const built = piTranscriptDocument({ entries, ui, cwd, markdownTheme, pendingTools });
  const document = built.document;
@@ -419,7 +440,7 @@ async function paintPiScreen({ entries, ui, sink, cwd, markdownTheme }) {
  const status = new Container();
  for (const row of piStatusRows(null)) status.addChild(row);
  const editor = piEditorDock(ui);
- const screen = piScreen({ document, editor, status, scrollbar: "auto" });
+ const screen = piScreen({ document, editor, status, footer, scrollbar: "auto" });
  // pi mounts its chat viewport with setLayoutRoot (interactive-mode.js), not addChild: that is what makes
  // pi-tui's layout engine allocate rows against the terminal height.
  ui.setLayoutRoot(screen.root);
@@ -429,10 +450,35 @@ async function paintPiScreen({ entries, ui, sink, cwd, markdownTheme }) {
  return {
   paintedRaw: sink.join(""),
   classOf,
+  spacers: built.spacers,
   document,
   screen,
   transcript: screen.transcript,
  };
+}
+
+/** pi's footer over pi-durable's committed entries, through the SHIPPED mapper and reader: pi's totals
+ * come from pi's own entry shapes (piSessionEntriesOf), pi's context numbers from pi-ai's calculateContextTokens
+ * over pi-durable's usage records against pi's ModelRecord window, and pi's branch word from piGitBranchOf()
+ * over the run cwd. `autoCompactEnabled` defaults to what the fixture's own pi settings say. */
+function footerFor({ entries, plane, conversationId, cwd, model, autoCompactEnabled = true }) {
+ return piFooterOf({
+  entries: piSessionEntriesOf(entries),
+  conversationId,
+  leafId: entries[0]?.id ?? null,
+  entryCount: entries.length,
+  cwd,
+  sessionName: null,
+  model,
+  routedModel: null,
+  providers: (plane.models?.getProviders?.() ?? []).length,
+  contextUsage: piContextOf(entries, plane.models, model),
+  thinkingLevel: plane.settings?.thinkingLevel ?? null,
+  autoCompactEnabled,
+  extensionStatuses: new Map(),
+  isUsingSubscription: () => false,
+  gitBranch: piGitBranchOf(cwd),
+ });
 }
 
 function piTokenText(count) {
@@ -467,34 +513,10 @@ function sumLedger(ledger) {
  return total;
 }
 
-/** pi's context numbers, from pi-durable's committed entries and pi's model record. pi's OWN context-token
- * arithmetic (pi exports calculateContextTokens from core/compaction) turns a pi-ai Usage into context
- * tokens, so nothing here re-derives what a context token is. */
-function piContextOf(entries, plane) {
- let tokens = 0;
- for (const entry of entries) for (const message of Array.isArray(entry?.model) ? entry.model : []) {
-  if (message?.usage) tokens += calculateContextTokens(message.usage);
- }
- const model = piModelOf(plane);
- const window = model?.contextWindow ?? 0;
- return { tokens, contextWindow: window, percent: window ? Math.round((tokens / window) * 1000) / 10 : 0 };
-}
-
-function piModelOf(plane) {
- const ref = plane.modelRef ?? plane.agent?.model ?? { provider: "faux", modelId: "faux-1" };
- const record = plane.models?.getModel?.(ref.provider, ref.modelId) ?? null;
- return { id: ref.modelId, provider: ref.provider, contextWindow: record?.contextWindow ?? 0, reasoning: record?.reasoning ?? false };
-}
-
-/** The git branch pi's footer shows, read from pi's own cwd's `.git/HEAD` (a data read, no shell). */
-function gitBranchOf(cwd) {
- try {
-  const head = readFileSync(join(cwd, ".git", "HEAD"), "utf8").trim();
-  return head.startsWith("ref: refs/") ? head.split("/").at(-1) : null;
- } catch {
-  return null;
- }
-}
+/** pi's context numbers and pi's model answer come from the SHIPPED piContextOf()/piModelOf() in
+ * src/tui/piscreen.mjs (imported above) - a fixture-local copy would prove the fixture, not the surface.
+ * pi's OWN context-token arithmetic (calculateContextTokens, exported by pi-coding-agent) is what turns
+ * a pi-ai Usage into context tokens, so nothing here re-derives what a context token is. */
 
 function homeTail(cwd) {
  const home = process.env.HOME ?? "";

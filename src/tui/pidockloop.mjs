@@ -30,7 +30,7 @@ import { resolve } from "node:path";
 import { transcript } from "../core.mjs";
 import { createSyncState, openWatch, snapshotSync } from "./sync.mjs";
 import { writerSubmit } from "./writer.mjs";
-import { entryText, installPiTheme, piContextOf, piDockOf, piFooterOf, piHeaderOf, piLiveRows, piMarkdownTheme, piModelOf, piScreen, piStatusRows, piTranscriptDocument } from "./piscreen.mjs";
+import { entryText, installPiTheme, piContextOf, piDockOf, piFooterOf, piGitBranchOf, piHeaderOf, piLiveRows, piMarkdownTheme, piModelOf, piScreen, piSessionEntriesOf, piStatusRows, piTranscriptDocument } from "./piscreen.mjs";
 
 /** How many previous committed prompts pi's Editor history starts with; pi's own history object is
  * unexported at this pin, so the seed is pi-durable's committed user entries, oldest first. */
@@ -90,22 +90,26 @@ export function piRunHeader(parts) {
  };
 }
 
-/** pi's footer for this run, from pi-durable's committed entries only. */
+/** pi's footer for this run, from pi-durable's committed entries only. pi's totals read pi's OWN entry
+ * shapes, so the entries travel through piSessionEntriesOf() (pi's `{type:"message"}` rows carrying pi-durable's
+ * own `usage` records); pi's context numbers stay over pi-durable's EntryRecords, which is what piContextOf
+ * reads; and the branch is piGitBranchOf() over the run cwd, which pi's footer.js appends as ` (${branch})`.
+ * Every other field stays pi-durable's read of this conversation. */
 function piRunFooter({ parts, entries, ui, context }) {
  const model = piModelOf(parts);
  return piFooterOf({
-  entries,
+  entries: piSessionEntriesOf(entries),
   conversationId: parts.conversation.id,
   leafId: entries[0]?.id ?? null,
   entryCount: entries.length,
   cwd: parts?.intent?.cwd ?? parts?.cwd,
+  gitBranch: piGitBranchOf(parts?.intent?.cwd ?? parts?.cwd),
   model: { id: model.id, provider: model.provider, contextWindow: model.contextWindow, reasoning: model.reasoning },
   routedModel: null,
   providers: (parts?.models?.getProviders?.() ?? []).length,
   contextUsage: piContextOf(entries, parts?.models, model),
   thinkingLevel: parts?.settings?.thinkingLevel ?? null,
   autoCompactEnabled: parts?.settings?.compaction?.enabled === true,
-  gitBranch: null,
  });
 }
 
