@@ -43,7 +43,7 @@ import { join } from "node:path";
 
 const PI_PKG = join("@earendil-works", "pi-coding-agent");
 const DOCS = ["packages.md", "extensions.md", "rpc.md", "rpc-commands.md", "json.md", "message-types.md", "tui.md",
-	"rpc-extension-ui.md", "session-format.md", "cli.md", "sessions.md", "compaction.md"];
+	"rpc-extension-ui.md", "session-format.md", "cli.md", "sessions.md", "compaction.md", "slash-commands.md"];
 // pi's extension docs import across four packages, so the grounding vocabulary does too: a name pi's pinned
 // release ships anywhere in these packages is a real API, and a name it ships nowhere is prose or an example.
 const DIST_PKGS = ["pi-coding-agent", "pi-ai", "pi-tui", "chord"];
@@ -254,6 +254,23 @@ for (const doc of ["rpc-commands.md", "json.md", "message-types.md", "tui.md", "
 		if (/^[A-Z][A-Za-z0-9]*$/.test(token) && token.length > 4 && (DECLARED.has(token) || NAMES.has(token))) push(doc, token, `a type pi's ${doc} names`);
 	}
 	for (const token of docFlags(doc)) push(doc, token, `a flag pi's ${doc} documents`, true, true);
+}
+
+// ---- pi's slash-command surface (what a user types at the dock) ----
+// pi's slash-commands.md enumerates its commands as backticked TABLE CELLS (`/quit`, `/model
+// [provider/model]`, `/import <path>`), so the capability is the name pi spells BEFORE its argument
+// hint, and the harvest takes exactly that shape: a backticked token starting with `/`, cut at the first
+// space, `[` or `<`. `ungrounded` because pi's pinned dist ships a builtin command as a bare `name: "quit"`
+// in its builtin table - never as the `/` spelling - so the `/` form is pi's docs spelling rather than a
+// dist symbol, and `viaCode false` because the harness answers a command by NAME through a table (src/slashplane
+//mjs' rows), not by calling a symbol whose name is `/quit`: coverage here has to be a matrix row, which is
+// what the objective asks for ("each decision has a row in the generated capability matrix").
+for (const token of docTokens("slash-commands.md")) {
+ if (!token.startsWith("/")) continue;
+ const cut = token.search(/[\s[<]/);
+ const name = cut === -1 ? token : token.slice(0, cut);
+ if (name.length < 2) continue;
+ push("slash-commands.md", name, `a command pi's slash-commands.md table lists`, true, false);
 }
 
 // ---- what the harness actually claims ----

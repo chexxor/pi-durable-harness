@@ -130,7 +130,7 @@ export const CAPABILITY_ROWS = [
  { capability: "package", names: ["pi manifest", "package.json pi"], status: "shimmed",
  reason: "src/packages/discover.mjs reads pi's manifest kinds and both package planes on disk, and an unknown kind becomes an explicit row rather than a silent drop",
  evidence: "demo/packages.test.mjs" },
- { capability: "package install", names: ["npm install", "git clone", "DefaultPackageManager.install", "--extensions", "--local", "--extension"], status: "unsupported",
+ { capability: "package install", names: ["npm install", "git clone", "DefaultPackageManager.install", "--extensions", "--local", "-l", "--extension"], status: "unsupported",
  reason: "installing resolves from npm/git over the network, and every demo in this repo runs offline; the harness loads packages that are already on disk and reports the rest as absent. pi's install scope flags (--extensions for a path, --local/--extension for which plane a package lands in) select a plane this harness only READS - src/packages/discover.mjs labels the two planes it finds (user and project) rather than writing into either",
  evidence: null },
  // ---- the harness's own surfaces, where pi-durable is the backend ----
@@ -211,8 +211,8 @@ export const CAPABILITY_ROWS = [
  reason: "pi's credential commands write pi's own auth files and can run an OAuth browser flow. This harness reads auth STATE through pi's ModelRuntime (src/providers.mjs) and never writes a credential, never runs a browser, and never mints a token - a model whose auth is absent is reported as such, which is what the demo shows",
  evidence: "demo/providers.test.mjs" },
  { capability: "model listing", names: ["--list-models", "--models"], status: "shimmed",
- reason: "the harness answers the same question offline through src/providers.mjs, which registers pi's providers and lists what resolves with auth state beside it",
- evidence: "demo/providers.test.mjs" },
+ reason: "the harness answers the same question OFFLINE through pi's own model plane: src/providers.mjs registers pi's providers, and cli.mjs answers pi's own `--list-models [search]` verb BEFORE it opens a store, printing pi's ModelRuntime.getAvailable over pi's provider plane with pi's OWN column names (`provider model context max-out thinking images`), pi's provider/id sort, pi's own fuzzyFilter (imported from pi-tui) over `${provider} ${model}`, pi's own `No models matching \"<pattern>\"` wording, and pi's token shorthand, which is copied from pi's pinned dist/cli/list-models.js because that file is NOT importable at this pin (the package's exports are only \".\" and \"./rpc-entry\", and dist/index.d.ts names neither listModels nor formatNoModelsAvailableMessage). The one measured difference from pi, and why the row stays `shimmed` rather than `native`: this ModelRuntime is created with `allowModelNetwork: false` and `refreshOnCreate: false`, so pi's startup catalog refresh never runs and the list is what pi's plane already knows HERE, and the `auth` column is a harness addition beside pi's columns (answered through models.registry.hasConfiguredAuth, which is the registry's view - the runtime's copy does not know the providers src/providers.mjs registered)",
+ evidence: ["demo/providers.test.mjs", "demo/cli.test.mjs"] },
  { capability: "session identity flags", names: ["--session-id", "--session-dir", "--continue", "--resume", "-c", "-r", "--no-session"], status: "shimmed",
  reason: "pi addresses a session by a file-level id; pi-durable conversations are store-resident, so the harness names one with --conversation and takes the store's latest with --resume/--continue (demo/cli.test.mjs). pi's --session-dir (a directory of session FILES) is pi's --store here: one SQLite store per directory, opened once (src/core.mjs). pi's --no-session runs pi-durable's in-memory Session instead of a store (demo/core.test.mjs proves both backends)",
  evidence: "demo/cli.test.mjs" },
@@ -295,9 +295,9 @@ export const CAPABILITY_ROWS = [
  { capability: "pi's session export verb", names: ["--export"], status: "unsupported",
  reason: "pi writes a session FILE out as HTML (`pi --export <input> [output]`); this harness has no HTML renderer plane and no session files - the transcript is pi-durable's committed entries, and the way a reader sees them is src/readapi.mjs or `--mode json`, which prints pi-durable's own entry rows (demo/cli.test.mjs, demo/readapi.test.mjs)",
  evidence: null },
- { capability: "pi's explicit resource paths (--skill/--theme)", names: ["--skill", "--theme", "additionalSkillPaths", "additionalThemePaths", "additionalPromptTemplatePaths", "additionalExtensionPaths"], status: "shimmed",
- reason: "an explicit path reaches pi's OWN loader through its own option names (src/packages/loader.mjs passes `additional*Paths` to DefaultResourceLoader, and demo/packages.test.mjs loads a fixture skill and prompt that way, including a missing path that is reported rather than guessed); what does NOT map is the flag's other half: pi's --skill/--theme also DISABLE discovered resources, while this harness keeps the discovered set and reports both halves",
- evidence: "demo/packages.test.mjs" },
+ { capability: "pi's explicit resource paths at invocation (--extension/-e, --skill, --prompt-template; --theme refused)", names: ["--extension", "-e", "--skill", "--prompt-template", "--theme", "additionalSkillPaths", "additionalThemePaths", "additionalPromptTemplatePaths", "additionalExtensionPaths", "additionalResourcePaths"], status: "shimmed",
+ reason: "an explicit path reaches pi's OWN loader under pi's OWN option names, at BOTH levels: src/packages/loader.mjs passes pi's `additional*Paths` to DefaultResourceLoader (demo/packages.test.mjs loads a fixture skill and prompt that way, and a missing path is reported rather than guessed), and cli.mjs honours pi's `--extension`/`-e <path>`, `--skill <path>` and `--prompt-template <path>` - repeatable, as pi's help says - by collecting them as `additionalResourcePaths` and forwarding them through src/cli-intent.mjs' harnessInvocation into src/agentplane.mjs, which spreads them into pi's loadPiResources options. No second discovery rule is written here: the run's own inventory then names what that path added (extensions 3 -> 4, commands 18 -> 19) and cli.mjs' `explicit:` line names the path, the extension it loaded and the command it registered (`/shouty`), with pi's own registration row for the source. What does NOT map is named below rather than folded in: pi's `--theme <path>` is REFUSED BY NAME because this harness applies only the palette pi discovered for pi's own `theme` SETTING (docs/themes.md), so an explicit theme path would load a palette no selection rule picks, and pi's `--skill`/`--theme` also DISABLE the DISCOVERED resources, while this harness keeps that set and opts kinds out through its own `--no-*` flags (row above)",
+ evidence: ["demo/packages.test.mjs", "demo/cli.test.mjs"] },
  { capability: "pi's own package update verbs", names: ["--all", "--force", "--self"], status: "shimmed",
  reason: "pi's `pi update` / `pi update --all` / `--self` / `--force` reinstall pi's npm packages; this harness moves the PIN instead: scripts/sync-pi.mjs --update <ref> refuses a ref it cannot see, and its PIN/DECLARED/RESOLVED report says whether the installed packages match the pin (it also refuses to reinstall pi itself, since this harness never vendors pi's CLI)",
  evidence: "scripts/sync-pi.mjs" },
@@ -316,6 +316,11 @@ export const CAPABILITY_ROWS = [
  { capability: "pi's offline mode", names: ["--offline"], status: "shimmed",
  reason: "scripts/sync-pi.mjs --offline reports drift as \"offline\" instead of asking upstream, and every demo in this repo runs offline (measured: strace -f -e trace=connect over the suite shows 0 AF_INET connects); what pi's --offline does NOT map onto is pi's own model-plane offline behaviour, since this harness answers turns with pi-ai's faux provider",
  evidence: "scripts/sync-pi.mjs" },
+ { capability: "pi's CLI options this harness answers no branch for, refused BY NAME at the flag parser",
+ names: ["--api-key", "--session-id", "--session-dir", "--fork", "--name", "-n", "--models", "--no-builtin-tools", "-nbt", "--no-mcp", "--theme", "--use-theme", "--export", "--verbose", "--tui-mode", "--approve", "-a", "--no-approve", "-na", "--offline"],
+ status: "unsupported",
+ reason: "MEASURED, not remembered: src/piflags.mjs reads pi's `Options:` table off pi's pinned dist/cli/args.js - 42 rows at this pin, spellings, value shapes and pi's own description words - and THROWS if that block, or pi's --mode/--print/--, stops shipping; cli.mjs' parseArgs answers one spelling per branch, and a spelling pi's table names that NO branch answered throws `pi flag <pi's own help line>; this harness does not take it - the capability matrix names it in docs/package-support.md`. That is the ONLY place a pi flag could be swallowed into the prompt words, which is how a user loses a flag at the command line; a spelling pi's table does not name keeps the harness's own rejection (`unknown flag` for a long spelling, pi's own `Unknown option:` wording for a short one). The spellings named here are exactly the ones no branch answers at this pin, and each has its reason in the row above that names it: --api-key/--approve/-a/--no-approve/-na write credentials or trust project-local files; --session-id/--session-dir address pi's session FILES, answered here by --session/--conversation on the store and --store for the directory; --fork mints a forked session file; --name/-n labels a session; --models feeds pi's Ctrl+P cycling; --no-builtin-tools/-nbt and --no-mcp switch off planes this harness never loads; --theme <path> would load a palette while the run applies only pi's `theme` SETTING palette; --use-theme picks that selection through pi's settings dialog; --export writes pi's HTML renderer; --verbose overrides pi's quietStartup; --tui-mode chooses between pi's fullscreen and regular renderers (this screen composes pi-tui's own TuiAltScreen only); --offline skips pi's startup network operations, which this harness never runs (its ModelRuntime is created with allowModelNetwork:false and refreshOnCreate:false). demo/cli.test.mjs runs EVERY spelling named here and requires pi's own help words in the refusal, so a flag pi gains - or a flag this harness starts swallowing - turns the check and this row red instead of quietly changing what a run means",
+ evidence: "demo/cli.test.mjs" },
 
  // ---- pi's RPC reference: rpc.md states the protocol, rpc-commands.md enumerates the verbs ----
  { capability: "pi's RPC verbs answered from durable state", names: ["prompt", "steer", "follow_up", "abort", "clear_queue", "new_session", "get_state", "get_messages", "get_entries", "get_tree", "get_last_assistant_text", "get_session_stats", "get_commands", "set_model", "get_available_models", "set_thinking_level", "get_available_thinking_levels", "set_auto_compaction", "compact", "switch_session", "fork", "clone", "get_fork_messages", "bash"], status: "shimmed",
@@ -399,6 +404,78 @@ export const CAPABILITY_ROWS = [
  { capability: "pi's extension dialog subprotocol (RPC UI)", names: ["extension_ui_request", "extension_ui_response", "ExtensionUIContext", "select", "confirm", "input", "editor", "notify", "set_editor_text"], status: "unsupported",
  reason: "pi's extensions open dialogs over a separate RPC subprotocol - a request record, a host that renders it, and an ExtensionUIContext that answers; this harness's RPC session has no UI channel and pi-durable has no dialog plane at this pin, so a bridged extension that calls ctx.ui throws, loudly, rather than hanging on a dialog nothing renders",
  evidence: null },
+ // ---- pi's SLASH-COMMAND surface: what a typed draft that starts with `/` or `!` MEANS ----
+ // pi dispatches these inside its own editor submit handler (dist/modes/interactive/interactive-mode.js
+ // `setupEditorSubmitHandler`), which is private to pi's InteractiveMode and so not composed here (row
+ // above). What IS shipped at this pin is the DATA pi dispatches from: pi's builtin table
+// (`BUILTIN_SLASH_COMMANDS` in dist/core/slash-commands.js, declared in dist/core/slash-commands.d.ts),
+ // pi's EXACT-vs-`/name <args>` match rule (spelled as `text === "/name"` / `text.startsWith("/name ")`
+ // in that submit handler) and pi's built-in extension registrations. src/slashplane.mjs READS all three
+ // off pi's pinned dist - and throws if a pin stops shipping them - rather than remembering a list, so a
+ // row below is falsifiable against a pin that changes pi's command surface.
+ {
+  capability: "pi's slash commands dispatched at pi's own dock, honoured where pi-durable has state",
+  names: ["/new", "/model", "/thinking", "/compact", "/session", "/copy", "/tree", "/clone"],
+  status: "shimmed",
+  reason: "ONE policy module answers the question for BOTH surfaces - src/slashplane.mjs is asked by pi's own dock (src/tui/pidockloop.mjs) and by the row surface (cli.mjs' writerTui), so a slash line cannot mean one thing in pi's window and another in the row view. The rules are pi's, read off pi's pinned dist (pi's builtin table, pi's derived EXACT-vs-prefix match rule, pi's `!`/`!!` bash rule); what this harness honours, it honours by calling pi-durable's EXISTING verbs through the ONE command handler src/rpc.mjs exports (`new_session`, `set_model` split at pi's first `/`, `set_thinking_level`, `compact`, `get_session_stats` + `get_state`, `get_last_assistant_text`, `get_tree`, `clone`) - nothing here reimplements a verb. A non-fallthrough decision clears the draft with pi's OWN rule (`clearEditor()`: editor setText to empty and nothing else), which is why a slash command is not an admission and writerSubmit stays the ONE mutation line",
+  evidence: ["demo/slash.test.mjs", "demo/pieditor.test.mjs"],
+ },
+ {
+  capability: "pi's /quit leaves the session through the ordinary cleanup",
+  names: ["/quit"],
+  status: "native",
+  reason: "pi's /quit rule is `clearEditor()` then leave, and pi's own entry for it is the template literal `Quit ${APP_NAME}` over pi's `APP_NAME` (dist/config.js reads pi's `pkg.piConfig?.name` with a fallback string, and pi's package declares no name, so pi says pi itself), so the words printed here are pi's own rather than a typed sentence. Nothing is submitted - the draft is cleared and the dock loop returns, so the caller's ordinary cleanup runs: settle what was queued, close the Harness, release the writer claim. A whole typed line of `quit`/`exit`/`q` still leaves the same way (pi-durable's own quit-word rule), and the dock's tally records WHY it left so the exit is visible rather than inferred",
+  evidence: "demo/slash.test.mjs",
+ },
+ {
+  capability: "pi's `!bash` / `!!bash` input at the dock",
+  names: ["!bash", "!!bash"],
+  status: "native",
+  reason: "measured at this pin rather than assumed: rpc.mjs already answers pi's `bash` verb over pi-durable's own NodeExecutionEnv (`makeEnv({ cwd })`, confinement pi-durable's) and queues the output as follow-up input exactly as rpc-commands.md documents (\"Included bash output reaches the model on the next prompt, not immediately\"), so the dock HONOURES `!cmd` and maps pi's `!!cmd` onto that verb's `excludeFromContext` flag; the queued submission id lands on parts.settlements, the same list cli.mjs' settleInvocation waits on, so the queueing process reaches an answer before it closes rather than parking input in pi.inbox",
+  evidence: "demo/slash.test.mjs",
+ },
+ {
+  capability: "pi's built-in slash commands this harness cannot honour, refused BY NAME in pi's own words",
+  names: ["/settings", "/scoped-models", "/export", "/import", "/share", "/bug", "/name", "/changelog", "/hotkeys", "/trust", "/login", "/logout", "/resume", "/reload"],
+  status: "unsupported",
+  reason: "each is refused, not swallowed and not guessed at: the line printed is pi's OWN `description` string for that name, read off pi's pinned builtin table, followed by the plane this harness has none of (pi's in-TUI selectors and dialogs, pi's session FILES, credentials for /login and /logout, pi's changelog/trust/keybinding reload). The refusal therefore says what the command does in pi and what this store is, in pi's words plus this repo's, and nothing here invents pi's wording; the command names are named in docs/package-support.md rather than silently dropped, which is what keeps the row falsifiable if a later pin gains the concept",
+  evidence: "demo/slash.test.mjs",
+ },
+ {
+  capability: "pi's /fork is refused BY NAME: pi's dock matches it EXACTLY only and opens its own selector",
+  names: ["/fork"],
+  status: "unsupported",
+  reason: "MEASURED from pi's OWN submit handler rather than assumed: pi matches `/fork` EXACTLY only (`text === \"/fork\"`; the names that take arguments at pi's dock are only model, thinking, export, import, bug, name, login, compact), so `/fork 2` is not a command at pi's dock and pi submits it as a message - and the EXACT form opens pi's own message selector, a UI this harness does not compose (row above). So `/fork` moves OUT of the honoured set: the refusal prints pi's own `description` for it, pi's words for what it asks for, and pi-durable's candidate EntryIds through pi-durable's EXISTING `get_fork_messages` verb, so the refusal is actionable rather than a dead end. The fork itself still exists where pi-durable has it: pi's RPC `fork` verb (row above) is answered on pi-durable's conversation plane, and this harness's `--fork` flag is its own row - what does not map is opening pi's selector at the dock",
+  evidence: "demo/slash.test.mjs",
+ },
+ {
+  capability: "pi's built-in EXTENSION slash commands (registered by pi's own built-in extensions)",
+  names: ["/llama", "/mcp"],
+  status: "unsupported",
+  reason: "these are not in pi's builtin table: pi's own built-in extension modules register them (`pi.registerCommand(name, { description })` in dist/extensions/llama/index.js and dist/extensions/mcp/index.js), and src/slashplane.mjs finds them by scanning pi's built-in extension modules for that registration, so the refusal carries pi's description AND names the module that registers it. This harness loads none of pi's built-in extensions - it loads the pi PACKAGES found on disk (row above) - so the commands those modules would register have nothing to run",
+  evidence: "demo/slash.test.mjs",
+ },
+ {
+  capability: "pi's package-plane commands discovered for this cwd, refused BY NAME at the dock",
+  names: ["/deepinfra-billing", "/look-pack", "/goal", "/sisyphus", "/goal-cancel", "/goal-direct", "/sisyphus-direct", "/goal-list", "/goal-status", "/goal-refresh", "/goal-recovery", "/goal-focus", "/goal-unfocus", "/goal-settings", "/goal-tweak", "/goal-clear", "/goal-pause", "/goal-resume"],
+  status: "unsupported",
+  reason: "the commands the pi packages THIS cwd discovered register (pi-durable's own `get_commands` answers them with pi's source tag extension and its invocation tag unsupported) are refused at the dock with src/promptplane.mjs' existing reason - pi invokes this command inside pi's CLI (a slash command with its own arguments and completion behavior) - so the wording stays pi-durable's package plane's rather than a paraphrase, and the matrix names every one of them as measured on THIS machine rather than as a remembered list",
+  evidence: "demo/slash.test.mjs",
+ },
+ {
+  capability: "pi's unknown `/name` and pi's template/skill command names keep pi's Normal message submission",
+  names: ["/skill:name"],
+  status: "shimmed",
+  reason: "pi's fallthrough branch - a name its builtin table does not list is submitted as a normal message, and pi's skill commands and prompt templates are expanded at the input seam (docs/extensions.md: input is checked for extension commands first, then skill commands, then prompt templates) - so src/slashplane.mjs returns `fallthrough` for those names and the caller submits the draft through the ONE seam src/cli-intent.mjs' expandRunInput exposes, which is what keeps pi's `/skill:name` expansion (row above) alive at the dock rather than shadowing it with a refusal",
+  evidence: ["demo/slash.test.mjs", "demo/cli.test.mjs"],
+ },
+ {
+  capability: "pi's /help is NOT a pi builtin at this pin, so answering it is a HARNESS ADDITION",
+  names: ["/help"],
+  status: "shimmed",
+  reason: "pi does not ship a `/help` name at v1.5.1 - it is absent from BUILTIN_SLASH_COMMANDS and from pi's own slash-commands.md, and pi's command menu is its editor autocomplete dropdown (row above: not composed here) - so the harness answers `/help` as its own addition, labelled as such in this row rather than passed off as pi's: the menu it prints is pi's own data (pi's builtin table, pi's built-in extension registrations, and pi's discovered package commands) each labelled with what THIS harness does with it, and no description is written by hand here",
+  evidence: "demo/slash.test.mjs",
+ },
 ];
 
 /** The rows, or only the rows of one status; the matrix the docs render and the demo asserts against. */

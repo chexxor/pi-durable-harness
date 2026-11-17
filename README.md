@@ -191,23 +191,53 @@ which sessions handed off through the package instead (`fromHook: true`) — is 
 the prefix rule it extracted from Durian-Pi's `seatmodel.mjs`; `src/spend.mjs` keeps a JSONL money
 ledger separate from pi-durable's usage plane, and classifies endpoints (loopback free, LAN not free).
 
+### Who answers a run, and what a typed `/` means
+
+A run that names NO model resolves pi's settings default (`defaultProvider` + `defaultModel` in pi's
+`settings.json`, merged by pi's own `SettingsManager`) through pi's provider plane and REALLY calls that
+provider — the credential comes from pi's own auth plane at pi's `agentDir`, and a plain `npm run cli`
+in a terminal answers from it. pi-ai's faux plane is armed ONLY when `--faux` is spelled, so `--faux`
+stays the explicit offline/demo flag rather than a fallback a run performs behind its user's back, and
+the faux warning on stderr appears ONLY on a run that did not ask for a real model — never on a plain one.
+Nothing is guessed: a run that asks for a real model while pi's settings name no default says so.
+`demo/modeldefault.test.mjs` (19 checks, offline) measures the pair end to end — the plane's `modelRef`,
+the agent record the Harness opens with, pi's `ModelRegistry.hasConfiguredAuth` for that model, and the
+same pair as pi's screen paints it in its header (`model <provider>/<id>`) and its footer
+(`(<provider>) <id>`) — on a `/quit`-only feed that admits NOTHING, which is why the demo stays in the
+offline suite; the proof that the settings model really answered is the live pty run captured in
+`.ai-work/pi-cli-parity-goal/proof-live-pty.json`.
+
+Slash commands are dispatched at pi's OWN dock — pi-tui's `CustomEditor`, the component pi's interactive
+layer mounts — by pi's OWN rule, read off the pinned dist by `src/slashplane.mjs` rather than remembered:
+pi's builtin slash table, pi's EXACT-vs-`/name <args>` match rule, pi's built-in extension registrations,
+and pi's `!`/`!!` bash rule. A draft pi-durable has state for runs on pi-durable's ONE command handler:
+`/new`, `/model <ref>`, `/thinking <level>`, `/compact`, `/session`, `/copy`, `/tree`, `/clone`, and
+`!cmd` / `!!cmd` through rpc.mjs' `bash` verb. A draft it has no plane for is refused BY NAME in pi's own
+words — `/settings`, `/export`, `/fork` (pi matches it EXACTLY only and opens its own message selector,
+so `/fork 2` is pi's ordinary message), pi's built-in extension commands `/llama` and `/mcp`, and `/model`
+or `/thinking` spelled with no argument rather than a guessed one. `/quit` leaves through the ordinary
+cleanup (the Harness closes and the writer lock is released) and is NEVER counted as a submitted
+admission, while a whole typed line of `quit` still leaves through pi-durable's own quit-word rule; pi's
+commands this harness does not take are listed by `/help` rather than hidden. `demo/slash.test.mjs` (28
+checks) measures every one of those decisions at the dock, and the capability matrix names each of them.
+
 ## pi-durable vs pi
 
 The pi package ecosystem is reused through pi's own library exports, and every capability pi has that
 pi-durable does not is **named** rather than quietly dropped: [docs/package-support.md](docs/package-support.md)
-is generated from `src/packages/matrix.mjs` by `scripts/render-matrix.mjs` — 115 rows
-(15 native / 44 shimmed / 56 unsupported), evidence per row, plus the packages actually installed on
+is generated from `src/packages/matrix.mjs` by `scripts/render-matrix.mjs` — 125 rows
+(17 native / 47 shimmed / 61 unsupported), evidence per row, plus the packages actually installed on
 this machine and what loaded from them. `src/packages/loader.mjs` uses pi's `DefaultResourceLoader`,
 `discoverAndLoadExtensions` and `loadProjectContextFiles`; `src/packages/adapter.mjs` maps pi's
 `registerTool`, `tool_call`/`tool_result`/provider/compaction handlers, skills, prompts, themes and
 context files onto pi-durable's `defineExtension`/`defineTool`/`hook`/`section`/`wrapTool` — a pi extension that registers a tool name the harness already offers becomes pi-durable's `wraps` slot (pi's `wrapRegisteredTool` case), so pi's argument repair and log line run AROUND pi-durable's own tool rather than beside it: `demo/packages.test.mjs` proves the wrapped `bash` ran exactly once (a marker file gained one line) and that pi's own execute never replaced the worker.
 `demo/packages.test.mjs` (51 checks) proves the shim runs end to end on a fixture package and on the
 four real pi packages installed here. `scripts/audit-pi-docs.mjs` re-reads pi's OWN docs inside the
-pinned package — all twelve that enumerate a surface this harness claims: packages.md, extensions.md,
+pinned package — all thirteen that enumerate a surface this harness claims: packages.md, extensions.md,
 rpc.md AND rpc-commands.md (pi's 34 RPC verbs), json.md (pi's event records), message-types.md (pi-ai's
 message types), tui.md (pi-tui's components), rpc-extension-ui.md (pi's extension dialogs), session-format.md
-(pi's session-file entry types), cli.md, sessions.md, compaction.md — harvests the 306 capabilities they
-enumerate, and fails if any is named by neither a matrix row's `names` array nor by a call in harness code
+(pi's session-file entry types), cli.md, sessions.md, compaction.md and slash-commands.md (pi's slash-command
+table) — harvests the 333 capabilities they enumerate, and fails if any is named by neither a matrix row's `names` array nor by a call in harness code
 with its comments stripped: `src/packages/matrix.mjs` is kept OUT of that code corpus, so the matrix cannot
 vouch for itself, and a documented flag counts as taken only when a file that actually parses `argv` spells
 that literal. What that audit forces into the open is pi's whole extension surface (its `ExtensionContext`
@@ -216,8 +246,15 @@ accessors and actions, its `ExtensionAPI` methods — `sendMessage`, `setModel`,
 autocomplete, the renderer/theme knobs, pi-tui's dialog components, and the `extension_ui_request`/
 `extension_ui_response` subprotocol), pi's RPC verb list (answered on pi-durable's planes, or refused by
 name), pi-ai's message types, pi's session-file entry types, and pi's CLI verbs this harness does not take
-(`--export`, `--name`, `--fork`, `--thinking`, `--skill`/`--theme`, `--json`, `--version`, `--offline`,
-`--credentials`, pi's package-update aliases and mcp add/login options) — every one named as native,
+(the 20 spellings pi's own `dist/cli/args.js` `Options:` block names and this harness has no plane for —
+`--api-key`, `--session-id`, `--session-dir`, `--fork`, `--name`/`-n`, `--models`, `--no-builtin-tools`/`-nbt`,
+`--no-mcp`, `--theme`/`--use-theme`, `--export`, `--verbose`, `--tui-mode`, `--approve`/`-a`,
+`--no-approve`/`-na`, `--offline` — each refused BY NAME at the flag parser in pi's own help words, while
+pi's `-v/-h/-p/-c/-r`, `--no-session`, `--faux`, `--model`, `--provider`, `--thinking`, pi's tool verbs,
+pi's resource-path verbs (`--extension`/`-e`, `--skill`, `--prompt-template`) and pi's `--list-models [search]`
+are honoured). `src/piflags.mjs` derives that flag table from pi's pinned `dist/cli/args.js` and THROWS if
+pi's `Options:` block or one of pi's core spellings vanishes, so a flag pi adds at a later pin becomes a
+refusal by name rather than a swallowed message) — every one named as native,
 shimmed or unsupported with a reason a reader can check against the tree, none silently dropped.
 
 ## How the work was executed
@@ -250,7 +287,7 @@ from the tags.
 
 Every source file carries a header naming the Durian-Pi file it was extracted from — and what was
 changed or omitted — or saying outright that there is no Durian-Pi original. `scripts/audit-provenance.mjs`
-checks that claim against the tree (`PROVENANCE PASS: 97/97 source files carry a header`), and
+checks that claim against the tree (`PROVENANCE PASS: 115/115 source files carry a header`), and
 `docs/provenance.md` is that audit's output: a table of file → source → what changed, so the extraction is
 re-derivable rather than a paragraph of prose.
 

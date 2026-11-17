@@ -11,6 +11,8 @@
 //   pi-coding-agent `CustomEditor.onEscape/onCtrlD/onAction` (dist/modes/interactive/components/custom-editor.d.ts)
 //   pi's app-key defaults `app.interrupt`/`app.exit`/`app.clear` (dist/core/keybindings.d.ts `APP_KEYBINDINGS`)
 //   pi's clear-the-draft rule `editor.setText("")` (dist/modes/interactive/interactive-mode.js `clearEditor`)
+//   pi's draft dispatch `setupEditorSubmitHandler` (dist/modes/interactive/interactive-mode.js), whose
+//   RULE this file asks src/slashplane.mjs about rather than retyping: which typed draft is a command
 //   pi-durable's entry/usage/live reads (dist/entries.d.ts, dist/harness/harness.d.ts, dist/harness/live.d.ts)
 // DROPPED from pi's own interactive layer, on purpose and named in the capability matrix rather than
 // silently: pi's `InteractiveMode`/`AgentSessionRuntime` (there is no pi session here), pi's
@@ -30,6 +32,7 @@ import { resolve } from "node:path";
 import { transcript } from "../core.mjs";
 import { createSyncState, openWatch, snapshotSync } from "./sync.mjs";
 import { writerSubmit } from "./writer.mjs";
+import { dispatchLine } from "../slashplane.mjs";
 import { entryText, installPiTheme, piContextOf, piDockOf, piFooterOf, piGitBranchOf, piHeaderOf, piLiveRows, piMarkdownTheme, piModelOf, piScreen, piSessionEntriesOf, piStatusRows, piTranscriptDocument } from "./piscreen.mjs";
 
 /** How many previous committed prompts pi's Editor history starts with; pi's own history object is
@@ -152,6 +155,7 @@ export async function piDockLoop({
  const editor = dock.editor;
  const drafts = [];
  const seenDrafts = [];
+ const slash = [];
  const cancelled = [];
  const seenCancels = [];
  const quit = { word: null };
@@ -215,6 +219,24 @@ export async function piDockLoop({
  const drain = async () => {
   while (drafts.length) {
    const text = drafts.shift();
+   // pi decides what a finished draft MEANS when it starts with `/` or `!` - its own submit handler
+   // (`setupEditorSubmitHandler`, dist/modes/interactive/interactive-mode.js) matches the draft against
+   // pi's builtin slash table and pi's `!`/`!!` bash rule before it submits anything. That rule is read
+   // off pi's pinned dist by src/slashplane.mjs, so the answer below is pi's decision and not a list
+   // remembered here; what it honours runs on pi-durable's ONE command handler (src/rpc.mjs' `handle()`),
+   // what it cannot is refused BY NAME in pi's own words, and `/quit` clears the draft and leaves.
+   // A plain draft falls through UNCHANGED, so `submitDraft` (the caller's ONE admission) stays the only
+   // thing a typed line can become.
+   const decision = await dispatchLine(text, parts, { context, report: say });
+   slash.push(decision);
+   if (decision.handled !== "fallthrough") {
+    for (const line of decision.lines) say(line);
+    // pi's OWN clear-the-draft rule (`clearEditor()` in interactive-mode.js: setText("") and nothing
+    // else), which is why a slash command is not an admission: nothing reaches submitDraft here.
+    editor.setText("");
+    if (decision.handled === "quit") { quit.word = decision.quit; return true; }
+    continue;
+   }
    if (quitWords.includes(text.trim().toLowerCase())) {
     quit.word = quit.word ?? text.trim().toLowerCase();
     return true;
@@ -266,6 +288,7 @@ export async function piDockLoop({
  return {
   theme: themeName,
   drafts: seenDrafts,
+  slash,
   caret,
   acks,
   submitted: acks.length,

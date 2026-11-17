@@ -35,6 +35,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { chooseSurface } from "../src/cli-intent.mjs";
 import { piSettings } from "../src/settings.mjs";
+import { capabilityMatrix } from "../src/packages/matrix.mjs";
 
 const ROOT = process.cwd();
 const CLI = join(ROOT, "cli.mjs");
@@ -242,9 +243,57 @@ async function main() {
 
  // 6) The refusals pi's surface has that this harness cannot match are named, not silently accepted.
  const badFlag = await runScript(CLI, ["--session-dir", cwd, "-p", "x"]);
- record(badFlag.exit !== 0 && (badFlag.stderr + badFlag.stdout).includes("unknown flag"),
-  "pi's --session-dir is refused loudly rather than guessed",
+ record(badFlag.exit !== 0 && (badFlag.stderr + badFlag.stdout).includes("this harness does not take it"),
+  "pi's --session-dir is refused BY NAME in pi's own help words rather than guessed",
   `${JSON.stringify((badFlag.stderr + badFlag.stdout).trim().slice(0, 90))}`);
+
+ // 6b) pi's option table is CONSULTED (src/piflags.mjs reads pi's pinned `Options:` block), so pi's
+ //     aliases work, a pi flag with no plane here is refused BY NAME in pi's own words, a spelling pi
+ //     does not name keeps the harness's own unknown-flag rejection, and pi's `--` ends option parsing.
+ const aliasRun = await runScript(CLI, ["--store", store, "--cwd", cwd, "--faux", fauxReply, "-nt", "-p", "aliases"]);
+ record(aliasRun.exit === 0 && !aliasRun.stderr.includes("unknown") && aliasRun.stderr.includes("plane:"),
+  "pi's short aliases (-nt, -p) are honoured as pi's --no-tools/--print", `stderr=${JSON.stringify(aliasRun.stderr.trim().slice(0, 60))}`);
+ const versionAlias = await runScript(CLI, ["-v"]);
+ record(versionAlias.exit === 0 && versionAlias.stdout.includes("pin v"),
+  "pi's -v alias answers pi's --version verb from the pin on disk", `stdout=${versionAlias.stdout.trim().slice(0, 60)}`);
+ // WHICH pi flags must be refused comes from the matrix, not from a list remembered here: one row names
+ // the spellings pi's own `Options:` table (read off pi's pinned dist by src/piflags.mjs) that no branch of
+ // cli.mjs' parseArgs answers, and every one of those names is run against the CLI below. A pi flag this
+ // harness starts SWALLOWING, or a row that stops naming a refusal, turns these checks red.
+ const refusalRow = capabilityMatrix(null).find((row) => row.capability === "pi's CLI options this harness answers no branch for, refused BY NAME at the flag parser");
+ record(Boolean(refusalRow),
+  "the capability matrix carries the refused pi flags as ONE row",
+  `names=${refusalRow?.names?.length ?? 0}`);
+ const honouredRows = capabilityMatrix(null).filter((row) => row.status === "shimmed" && String(row.capability).includes("invocation"));
+ record(honouredRows.length > 0,
+  "the honoured pi spellings are named by their own rows (not by this demo's list)",
+  `rows=${honouredRows.map((row) => row.capability).join(" | ").slice(0, 120)}`);
+ for (const spelling of refusalRow?.names ?? []) {
+  const refused = await runScript(CLI, [spelling, "x"]);
+  record(refused.exit !== 0 && refused.stderr.includes("pi flag") && refused.stderr.includes("this harness does not take it"),
+   `pi's ${spelling} is refused BY NAME quoting pi's own words (the matrix row names it)`,
+   `stderr=${JSON.stringify(refused.stderr.trim().slice(0, 70))}`);
+ }
+ const notPi = await runScript(CLI, ["--not-a-flag"]);
+ record(notPi.exit !== 0 && notPi.stderr.includes("unknown flag"),
+  "a spelling pi's table does not name keeps the harness's own unknown-flag rejection", `stderr=${JSON.stringify(notPi.stderr.trim())}`);
+ const afterDash = await runScript(CLI, ["--store", store, "--cwd", cwd, "--faux", fauxReply, "--", "-p", "literal prompt"]);
+ record(afterDash.exit === 0 && afterDash.stdout.includes(fauxReply) && !afterDash.stderr.includes("unknown"),
+  "pi's `--` ends option parsing, so `-p literal prompt` stays the prompt words", `stdout=${afterDash.stdout.trim()}`);
+ // pi's `--list-models [search]`, answered offline through pi's own model plane BEFORE the store claim.
+ const listed = await runScript(CLI, ["--list-models"]);
+ record(listed.exit === 0 && listed.stdout.includes("provider") && listed.stdout.includes("max-out") && listed.stderr.includes("plane: models="),
+  "pi's --list-models prints pi's own table over pi's model plane (offline, auth beside it)", `stdout=${JSON.stringify(listed.stdout.trim().split(String.fromCharCode(10))[0])}`);
+ const searched = await runScript(CLI, ["--list-models", "zzz-no-such-model"]);
+ record(searched.exit === 0 && searched.stdout.includes("No models matching"),
+  "pi's --list-models [search] takes pi's optional value and says so when nothing matches", `stdout=${searched.stdout.trim()}`);
+ // pi's `--extension/-e <path>` goes to pi's OWN loader under pi's OWN option name (no second discovery
+ // rule), and the run names what that path loaded and registered.
+ const extPath = join(cwd, "shout-ext.ts");
+ writeFileSync(extPath, "export default (pi) => {\n pi.registerCommand(\"shouty\", { description: \"A command an explicit -e path registers.\", handler: async (args, ctx) => {} });\n};\n");
+ const extRun = await runScript(CLI, ["--store", join(cwd, "e.sqlite"), "--cwd", cwd, "--faux", fauxReply, "-e", extPath, "-p", "explicit extension"]);
+ record(extRun.exit === 0 && extRun.stderr.includes(`explicit: paths=${extPath}`) && extRun.stderr.includes("registeredCommands=/shouty"),
+  "-e <path> loads an explicit extension through pi's loader and names its command", `stderr=${JSON.stringify(extRun.stderr.split(String.fromCharCode(10)).filter((l) => l.startsWith("explicit:")).join(" | ").slice(0, 120))}`);
 
  // 7) The interactive TUI is reachable from the CLI itself, not only from a two-process fixture:
  //    --tui paints the writer view over the conversation THIS process owns, and a typed line becomes

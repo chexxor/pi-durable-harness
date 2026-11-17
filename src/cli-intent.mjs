@@ -199,7 +199,7 @@ export async function priorLines(storePath, context = BACKGROUND_CONTEXT) {
  *   - `--session <id>` opens THAT conversation (`Harness.conversation(id, context)`), which is pi's
  *     reopen-by-id verb with pi-durable's ConversationId in place of a session file name.
  */
-export async function harnessInvocation(flags, { extraExtensions = [], context = BACKGROUND_CONTEXT } = {}) {
+export async function harnessInvocation(flags, { extraExtensions = [], additionalResourcePaths = {}, context = BACKGROUND_CONTEXT } = {}) {
 	const opened = intent(flags, { cwd: flags?.cwd ?? process.cwd() });
 	const prior = await priorLines(opened.store, context);
 	// Reopen is measured, not remembered: a second invocation in one directory reopens the store the
@@ -211,13 +211,29 @@ export async function harnessInvocation(flags, { extraExtensions = [], context =
 	// onto pi-durable extensions by src/packages/adapter.mjs. Every surface - print, JSON, RPC, TUI -
 	// therefore runs on the SAME plane, and no mode can quietly open a harness that never saw pi's
 	// packages. An explicit --model always names the model; pi's settings default applies only when the
-	// caller says a real model may answer (opts.realModel), which is what keeps an offline run from
-	// reaching pi's provider endpoints behind the harness's back.
+	// caller says a real model may answer (opts.realModel), and this file sets that key from ONE
+	// rule: pi-ai's faux plane answers ONLY a run that spelled `--faux`.
+	// WHO answers this run, in pi's own terms: an explicit `--model` names the model; `--faux` names
+	// pi-ai's scripted offline plane; anything else is a normal pi run, which answers with pi's
+	// settings default model through pi's provider plane. The rule lives in ONE place, so print,
+	// JSON, RPC and the TUI window cannot pick different models for the same flags.
+	const realModel = !opened.faux;
 	const plane = await agentPlane({
 		cwd: opened.cwd,
-		...(opened.model ? { modelRef: opened.model, realModel: true } : {}),
+		...(opened.model ? { modelRef: opened.model } : {}),
+		// ONE key decides who answers: `--faux` says pi-ai's scripted plane, every other run says
+		// pi's settings default may answer through pi's provider plane. `--model` names the model
+		// either way; with `--faux` it names which id the script answers for.
+		realModel,
 		...(opened.provider ? { defaultProvider: opened.provider } : {}),
 		kindsOff: opened.kindsOff,
+		// pi's explicit resource paths (pi's `--extension/-e`, `--skill`, `--prompt-template <path>` at
+		// invocation): handed to pi's OWN resource loader under pi's OWN option names
+		// (DefaultResourceLoaderOptions' additionalExtensionPaths / additionalSkillPaths /
+		// additionalPromptTemplatePaths, read off dist/core/resource-loader.d.ts at this pin), so pi's
+		// loader decides what they load - no second discovery rule is written here. pi's `--theme <path>`
+		// has no plane here and is refused by name (see docs/package-support.md).
+		...(Object.keys(additionalResourcePaths).length ? { additionalResourcePaths } : {}),
 	});
 	const parts = await openHarness({
 		cwd: opened.cwd,
@@ -278,6 +294,12 @@ export async function harnessInvocation(flags, { extraExtensions = [], context =
 	return {
 		...parts,
 		intent: opened,
+		// WHICH model answers this run, as the plane that decided it named it: pi's `--model`, else pi's
+		// settings default through pi's provider plane (a normal run), else pi-ai's faux plane (`--faux`
+		// only). The interactive screen reads this to label its header and footer, so a real run says pi's
+		// settings default there instead of falling back to faux/faux-1 - and a `--faux` run, whose
+		// plane.modelRef stays null, still says pi-ai's faux plane. No model is guessed here.
+		modelRef: plane.modelRef,
 		// What this run's plane actually loaded: which pi packages answered, which pi verbs (commands/
 		// shortcuts/flags) they register, and which kinds pi's own opt-out flags skipped. RPC's get_commands
 		// and the TUI read this, so an inventory a user sees is measured from this run, not remembered.

@@ -20,6 +20,13 @@ import { serveOwner, request } from "./src/attach.mjs";
 import { handle, commandNames } from "./src/rpc.mjs";
 import { scriptTurn, transcript } from "./src/core.mjs";
 import { harnessInvocation, intent, finalAnswerText, rpcLine, settleInvocation, chooseSurface, expandRunInput } from "./src/cli-intent.mjs";
+// pi's OWN command-line option table, read off pi's pinned release (src/piflags.mjs): cli.mjs answers
+// each of pi's spellings explicitly, and quotes pi's own help words when refusing one it cannot take.
+import { piCliFlagOf, piCliFlagText } from "./src/piflags.mjs";
+// pi's model plane (pi's ModelRuntime over pi's provider configs), which is what pi's own
+// `--list-models` walks; pi's fuzzy search filter is pi-tui's, the same one pi's listModels calls.
+import { buildModels } from "./src/providers.mjs";
+import { fuzzyFilter } from "@earendil-works/pi-tui";
 // pi's JSON event records (docs/json.md inside the pinned package) are what --mode json and --mode
 // rpc print, built by src/pievents.mjs from pi-durable's committed entries.
 import { piEventsOf, sessionHeader } from "./src/pievents.mjs";
@@ -30,6 +37,11 @@ import { createUiDriver } from "./src/tui/driver.mjs";
 import { applyThemeToRows } from "./src/tui/theme.mjs";
 import { renderFrame, rowComponent, INPUT_MARK } from "./src/tui/frame.mjs";
 import { piDockLoop } from "./src/tui/pidockloop.mjs";
+// ONE slash policy, asked by BOTH surfaces: pi's own dock (src/tui/pidockloop.mjs) and this row surface
+// ask the same module what a typed draft that starts with `/` or `!` MEANS, so a slash command cannot
+// mean one thing in one window and another thing in the other. The rules are pi's, read off pi's pinned
+// dist there rather than remembered here.
+import { dispatchLine } from "./src/slashplane.mjs";
 import { ProcessTerminal, TuiAltScreen, TuiMainScreen } from "@earendil-works/pi-tui";
 
 const HELP = `pi-durable-harness [options] [--] [prompt words...]
@@ -47,8 +59,15 @@ const HELP = `pi-durable-harness [options] [--] [prompt words...]
   --append-system-prompt <text>   extra system section
   --tools <list>          comma list of tool names
   --exclude-tools <list>  comma list of tool names to drop
-  --no-tools              no tools
+  -t, --tools <list>      comma list of tool names
+  -xt, --exclude-tools <list>  comma list of tool names to drop
+  --no-tools, -nt         no tools
   --thinking <level>      thinking level for the conversation (pi-durable's Agent.thinkingLevel)
+  -e, --extension <path>  load one more pi extension from <path> (repeatable; pi's own loader)
+  --skill <path>          load one more pi skill from <path> (repeatable; pi's own loader)
+  --prompt-template <path> load one more pi prompt template from <path> (repeatable; pi's own loader)
+  --list-models [search]  what pi's model plane offers here (offline), and exit
+  --                      end of options; the rest are the prompt words
   --faux <text>           offline scripted reply (demo/CI; no keys, no network)
   --attach                force attach to a running owner as a reader
   --tui                   the harness's flat row surface over this session (this process owns the store)
@@ -62,67 +81,176 @@ A plain run IN A TERMINAL (no prompt, no --mode) opens the interactive TUI over 
 this process owns that store, so a typed line goes to Conversation.submit on the store's ONE mutation
 line. ESC or Ctrl+C quits; typing q or quit on a line of its own does the same. Piped in (no TTY) a run
 needs a prompt - an interactive window in a pipe would sit open forever.
-  --version               the pinned release this harness resolves, and exit
-  --help                  this text`;
+  -v, --version           the pinned release this harness resolves, and exit
+  --help                  this text
 
+A pi flag this harness has no plane for (pi's --api-key, --approve, --no-approve, --offline, --name,
+--models, --session-id, --session-dir, --fork, --theme, --use-theme, --no-mcp, --no-builtin-tools,
+--tui-mode, --verbose, --export) is refused BY NAME quoting pi's own help words, and docs/package-support.md
+carries the row that says why - a pi flag is never quietly dropped into the prompt words.`;
+
+/** pi's own command line, spelled as pi spells it: the option rows below are the spellings pi's
+ * pinned release ships (src/piflags.mjs reads them off pi's `Options:` block in dist/cli/args.js, and
+ * THROWS if pi's release stops shipping that table), so a spelling this branch does not answer is
+ * either one of pi's - refused BY NAME quoting pi's own help words - or not pi's at all - the harness's
+ * own unknown-flag/unknown-option rejection, unchanged from before. A pi flag is never quietly pushed
+ * into the prompt words: that is how a user loses a flag, and it is what the user hit at the dock.
+ * pi's verbs with no plane here are the rows in docs/package-support.md that name them. */
 export function parseArgs(argv) {
-  const a = { appendSystem: [], messages: [], noKinds: [] };
+  const a = { appendSystem: [], messages: [], noKinds: [], extensionPaths: [], skillPaths: [], templatePaths: [] };
+  const piRefusal = (spelling) =>
+    `pi flag ${piCliFlagText(spelling)}; this harness does not take it - the capability matrix names it in docs/package-support.md`;
   for (let i = 0; i < argv.length; i++) {
     const t = argv[i];
-    if (t === "--version") a.version = true;
+    // pi's own end of option parsing: after `--`, every arg is a message (dist/cli/args.js pushes
+    // args.slice(i + 1) into its messages, and pi's `@file` args into its file plane - the file plane
+    // is named in the matrix rather than implemented here).
+    if (t === "--") { a.messages.push(...argv.slice(i + 1)); break; }
+    // pi's spellings and pi's own aliases, taken from pi's option rows: -v/--version, -h/--help,
+    // -p/--print, -c/--continue, -r/--resume, --no-session.
+    else if (t === "--version" || t === "-v") a.version = true;
     else if (t === "--help" || t === "-h") a.help = true;
     else if (t === "-p" || t === "--print") a.print = true;
     else if (t === "-c" || t === "--continue" || t === "-r" || t === "--resume") a.continue = true;
     else if (t === "--no-session") a.noSession = true;
     else if (t === "--hold") { a.hold = Number(argv[i + 1]); i++; }
     else if (t === "--faux") { a.faux = argv[i + 1]; i++; }
-    else if (t === "--no-tools") a.noTools = true;
+    else if (t === "--no-tools" || t === "-nt") a.noTools = true;
     // pi's per-resource opt-outs: one flag per kind of pi package it will not load. The harness honours
     // them by NOT loading that kind and saying so in the run's own inventory, which is why they are
     // parsed flags rather than a refusal.
-    else if (t === "--no-extensions") a.noKinds.push("extensions");
-    else if (t === "--no-skills") a.noKinds.push("skills");
+    else if (t === "--no-extensions" || t === "-ne") a.noKinds.push("extensions");
+    else if (t === "--no-skills" || t === "-ns") a.noKinds.push("skills");
     else if (t === "--no-themes") a.noKinds.push("themes");
-    else if (t === "--no-prompt-templates") a.noKinds.push("prompts");
-    else if (t === "--no-context-files") a.noKinds.push("context");
+    else if (t === "--no-prompt-templates" || t === "-np") a.noKinds.push("prompts");
+    else if (t === "--no-context-files" || t === "-nc") a.noKinds.push("context");
+    // pi's tool-selection verbs and pi's own short aliases for them.
+    else if (t === "--tools" || t === "-t") { a.tools = argv[i + 1].split(","); i++; }
+    else if (t === "--exclude-tools" || t === "-xt") { a.excludeTools = argv[i + 1].split(","); i++; }
+    // pi's explicit resource paths: handed to pi's OWN resource loader under pi's OWN option names
+    // (DefaultResourceLoaderOptions' additionalExtensionPaths / additionalSkillPaths /
+    // additionalPromptTemplatePaths, forwarded by src/agentplane.mjs), so no second discovery rule
+    // is invented here. pi repeats them; so do we.
+    else if (t === "--extension" || t === "-e") { a.extensionPaths.push(argv[i + 1]); i++; }
+    else if (t === "--skill") { a.skillPaths.push(argv[i + 1]); i++; }
+    else if (t === "--prompt-template") { a.templatePaths.push(argv[i + 1]); i++; }
+    // pi's `--list-models [search]`: pi takes the optional search value ONLY when the next arg starts
+    // with neither `-` nor `@` (dist/cli/args.js), and answers it before opening a session.
+    else if (t === "--list-models") {
+      const next = argv[i + 1];
+      if (next !== undefined && !next.startsWith("-") && !next.startsWith("@")) { a.listModels = next; i++; }
+      else a.listModels = true;
+    }
     // A terminal delivers keystroke chunks; `--keystroke-input` lets a piped run speak the SAME way
     // (one key per piece, ENTER as `\r`), which is how the offline demo proves the interactive path.
     else if (t === "--keystroke-input") a.keystrokeInput = true;
     else if (t === "--width") { a.width = Number(argv[i + 1]); i++; }
     else if (t === "--height") { a.height = Number(argv[i + 1]); i++; }
     else if (t === "--attach") a.attach = true;
-    else if (t === "--attach") a.attach = true;
     else if (t === "--tui" || t === "--row-view") a.tui = true;
+    // pi's value-taking verbs (long spelling), the harness's own long verbs, and then the two honest
+    // endings of the loop.
     else if (t.startsWith("--")) {
       const name = t.slice(2);
       const value = argv[i + 1];
-      // An unknown flag fails loudly instead of guessing: a silently dropped flag is how a user ends
-      // up writing into the wrong store.
       if (name === "store") { a.store = value; i++; }
       else if (name === "cwd") { a.cwd = value; i++; }
       else if (name === "session") { a.conversation = value; i++; }
-      else if (name === "mode") { a.mode = value; i++; }
       else if (name === "conversation") { a.conversation = value; i++; }
+      else if (name === "mode") { a.mode = value; i++; }
       else if (name === "model") { a.model = value; i++; }
       else if (name === "provider") { a.provider = value; i++; }
       else if (name === "system-prompt") { a.systemPrompt = value; i++; }
       else if (name === "append-system-prompt") { a.appendSystem.push(value); i++; }
       else if (name === "thinking") {
+        // pi's own thinking vocabulary (pi-ai's ThinkingLevel), not a list typed here.
         if (!MODEL_THINKING_LEVELS.includes(value)) throw new Error(`--thinking needs one of ${MODEL_THINKING_LEVELS.join(", ")}; got ${value}`);
         a.thinking = value;
         i++;
       }
-      else if (name === "tools") { a.tools = value.split(","); i++; }
-      else if (name === "exclude-tools") { a.excludeTools = value.split(","); i++; }
       else if (name === "faux") { a.faux = value; i++; }
       else if (name === "hold") { a.hold = Number(value); i++; }
+      // pi's option table names this spelling and no branch above answered it: this harness has no plane
+      // for it, so it is refused BY NAME in pi's own help words rather than dropped.
+      else if (piCliFlagOf(t)) throw new Error(piRefusal(t));
       else throw new Error(`unknown flag ${t}; run with --help`);
+    }
+    else if (t.startsWith("-") && t !== "-") {
+      // pi's short spellings are aliases of its long flags, so a short one no branch answered is refused
+      // by the name pi's own table gives it (-n/--name, -a/--approve, -na/--no-approve,
+      // -nbt/--no-builtin-tools); anything else is pi's own unknown option.
+      if (piCliFlagOf(t)) throw new Error(piRefusal(t));
+      throw new Error(`unknown option ${t}; run with --help`);
     }
     else a.messages.push(t);
   }
   if (a.mode && !["text", "json", "rpc"].includes(a.mode)) throw new Error(`--mode must be text, json, or rpc; got ${a.mode}`);
   if (a.mode === "rpc" && !a.messages.length) a.mode = "rpc";
   return a;
+}
+
+/** pi's own token shorthand (204800 -> "204.8K", 1000000 -> "1M"), pi's own rounding, copied from pi's
+ * pinned dist/cli/list-models.js - the file pi's `--list-models` prints through. That file is NOT
+ * dist/cli/list-models.js, the file pi's `--list-models` prints through. That file is NOT importable
+ * (this pin's package exports are "." and "./rpc-entry"), so the harness answers pi's verb through the
+ * same SOURCE pi answers it from - ModelRuntime.getAvailable over pi's provider plane - and prints it
+ * with pi's own column names, pi's own sort and pi's own shorthand. The one measured difference, named
+ * in the capability matrix row: this ModelRuntime is created OFFLINE (`allowModelNetwork: false`,
+ * `refreshOnCreate: false`), so pi's catalog refresh never runs and the list is what pi's plane already
+ * knows here - which is also why pi's auth state is printed beside it. */
+function formatTokenCount(count) {
+  if (count >= 1_000_000) {
+    const millions = count / 1_000_000;
+    return millions % 1 === 0 ? `${millions}M` : `${millions.toFixed(1)}M`;
+  }
+  if (count >= 1_000) {
+    const thousands = count / 1_000;
+    return thousands % 1 === 0 ? `${thousands}K` : `${thousands.toFixed(1)}K`;
+  }
+  return count.toString();
+}
+
+async function listModelsAnswer(search) {
+  const models = await buildModels({ offline: true });
+  const runtime = models.registry.runtime;
+  const loadError = runtime.getError();
+  if (loadError) console.error(`Warning: errors loading models.json:\n${loadError}`);
+  const found = [...await runtime.getAvailable(undefined, {})];
+  if (!found.length) {
+    console.error(`plane: models=0 available (offline through pi's model plane; auth: none configured)`);
+    console.log("No models available.");
+    return;
+  }
+  const pattern = typeof search === "string" ? search.trim() : "";
+  const filtered = pattern ? fuzzyFilter(found, pattern, (m) => `${m.provider} ${m.id}`) : found;
+  if (!filtered.length) {
+    console.log(`No models matching "${pattern}"`);
+    return;
+  }
+  filtered.sort((a, b) => {
+    const providerCmp = a.provider.localeCompare(b.provider);
+    if (providerCmp !== 0) return providerCmp;
+    return a.id.localeCompare(b.id);
+  });
+  const rows = filtered.map((m) => ({
+    provider: m.provider,
+    model: m.id,
+    context: formatTokenCount(m.contextWindow),
+    maxOut: formatTokenCount(m.maxTokens),
+    thinking: m.reasoning ? "yes" : "no",
+    images: m.input.includes("image") ? "yes" : "no",
+    // pi's auth state for the row: pi-ai's Models plane reports it through pi's ModelRegistry
+    // (registry.hasConfiguredAuth), which knows the providers buildModels registered; the runtime's
+    // own copy of that verb answers only for pi's models.json providers, so the registry's answer is
+    // the one that matches the plane this harness registered.
+    auth: models.registry.hasConfiguredAuth(m) ? "configured" : "unconfigured",
+  }));
+  const headers = { provider: "provider", model: "model", context: "context", maxOut: "max-out", thinking: "thinking", images: "images", auth: "auth" };
+  const widths = Object.fromEntries(Object.entries(headers).map(([key, head]) => [key, Math.max(head.length, ...rows.map((r) => String(r[key]).length))]));
+  console.error(`plane: models=${filtered.length} available (offline through pi's model plane; ${rows.filter((r) => r.auth === "configured").length} configured by pi's auth plane)`);
+  const cells = (row) => Object.keys(headers).map((key) => String(row[key]).padEnd(widths[key]));
+  console.log(cells(headers).join("  ").trimEnd());
+  for (const row of rows) console.log(cells(row).join("  ").trimEnd());
 }
 
 /** What release is this harness running on? The pin file and package.json, both on disk: pi's `--version`
@@ -155,6 +283,10 @@ async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) { console.log(HELP); return; }
   if (args.version) { console.log(releaseLine()); return; }
+  // pi's `--list-models` answers BEFORE the store is claimed: pi's own main.js runs its listModels
+  // before opening a session, so a run that only asks which models exist neither claims the store nor
+  // opens a conversation (which is what lets it run offline with no keys at all).
+  if (args.listModels !== undefined) { await listModelsAnswer(args.listModels); return; }
   const cwd = args.cwd ?? process.cwd();
   const store = args.store ?? join(cwd, "harness.sqlite");
 
@@ -213,7 +345,16 @@ async function main() {
     // pi's --append-system-prompt extends the base instructions rather than replacing them.
     ...(args?.systemPrompt && args?.appendSystem?.length ? { systemPrompt: [...(args.systemPrompt ? [args.systemPrompt] : []), ...args.appendSystem].join("\n\n") } : {}),
   };
-  const parts = await harnessInvocation(flags, { extraExtensions: [] });
+  const parts = await harnessInvocation(flags, {
+    extraExtensions: [],
+    // pi's explicit resource paths (--extension/-e, --skill, --prompt-template <path>): forwarded
+    // under pi's OWN loader option names, so pi's own loader decides what they load and reports it.
+    additionalResourcePaths: {
+      ...(args.extensionPaths.length ? { additionalExtensionPaths: args.extensionPaths } : {}),
+      ...(args.skillPaths.length ? { additionalSkillPaths: args.skillPaths } : {}),
+      ...(args.templatePaths.length ? { additionalPromptTemplatePaths: args.templatePaths } : {}),
+    },
+  });
   // What this run's plane actually loaded, printed once per run on stderr: the counts and names come
   // from the plane THIS run composed (pi's settings, pi's discovered packages, the verbs they register,
   // the kinds pi's opt-out flags skipped), so a user can see that `npm run cli` in this cwd really is
@@ -222,6 +363,16 @@ async function main() {
   const count = (list) => (Array.isArray(list) ? list.length : 0);
   const namesOf = (list) => list.map((row) => row?.name ?? row?.id ?? row?.package ?? String(row)).filter(Boolean).join(",");
   console.error(`plane: packages=${count(res.packages)} (${namesOf(res.packages)}) extensions=${count(res.loaderExtensions)} loaded=${count(res.extensionPaths)} bridged=${count(res.durableExtensions)} commands=${count(res.commands)} shortcuts=${count(res.shortcuts)} templates=${count(res.promptTemplates)} skills=${count(res.skills)} themes=${count(res.themes)} contextFiles=${count(res.contextFiles)} theme=${res.themeName ?? "pi names none"} settings=${count(res.settingsPaths)} unmappedSettings=${count(res.unmappedSettings)} skipped=${(res.skipped ?? []).length ? (res.skipped ?? []).map((s) => typeof s === "string" ? s : s?.kind).join(" ") : "none"}`);
+  // pi's explicit resource paths (`--extension/-e`, `--skill`, `--prompt-template <path>`): name WHICH
+  // entries of this run's plane came from a path the caller gave, and what they registered, so a demo
+  // can assert the load rather than comparing a total that depends on which pi packages are installed.
+  // The rows come from pi's own loader answer and pi's own registration inventory (source = the path).
+  if (args.extensionPaths.length || args.skillPaths.length || args.templatePaths.length) {
+    const given = [...args.extensionPaths, ...args.skillPaths, ...args.templatePaths].filter(Boolean);
+    const loaded = (res.loaderExtensions ?? []).filter((e) => given.includes(String(e?.path ?? e?.resolvedPath ?? ""))).map((e) => e?.path);
+    const fromPaths = (res.commands ?? []).filter((row) => given.includes(String(row?.source ?? ""))).map((row) => `/${row?.name}`);
+    console.error(`explicit: paths=${given.join(",")} loadedExtensions=${loaded.join(",") || "none"} registeredCommands=${fromPaths.join(",") || "none"}`);
+  }
   for (const w of parts.planeWarnings ?? []) console.error(`warning [${w.scope}]: ${w.message}`);
   const server = claim ? serveOwner(parts, claim.lock.socket) : null;
   const mode = parts.intent.mode;
@@ -250,9 +401,22 @@ async function main() {
   try {
     if (tui && piScreen) {
       const screenRun = await piScreenRun(parts, argsFor, { shouldStop: () => signalled !== null });
+      // What the dock queued has to reach an answer BEFORE this process closes: a `!bash` output is
+      // pi-durable's follow-up input parked in pi.inbox (rpc-commands.md: "Included bash output reaches
+      // the model on the next prompt"), and pi-durable's own promise is that the process which queued
+      // input reaches an answer before it closes rather than leaving the input parked for the next one.
+      if ((parts.settlements ?? []).length || (parts.runs ?? []).length) await settleInvocation(parts);
+      // pi's per-draft slash decisions, so the proof below can assert WHICH word pi answered rather
+      // than reading a transcript: one `handled:name` per non-fallthrough draft plus the tallies.
+      const slashRows = screenRun?.slash ?? [];
+      const slashTally = {};
+      for (const row of slashRows) slashTally[row.handled] = (slashTally[row.handled] ?? 0) + 1;
+      const slashNames = slashRows.filter((row) => row.handled !== "fallthrough")
+        .map((row) => `${row.handled}:${String(row.name ?? row.kind ?? "").split(/\s+/)[0] || row.kind}`)
+        .join(" ");
       // pi's own numbers, from pi-durable's committed state: what the run admitted, cancelled, and
       // why pi's key table said to leave. The theme name is pi's setting plus pi's discovered record.
-      console.error(`screen: pi's chat viewport over pi-durable's entries paints=${screenRun?.paints ?? 0} submitted=${screenRun?.submitted ?? 0} cancelled=${screenRun?.cancelled ?? 0} quit=${screenRun?.quit ?? "-"} theme=${screenRun?.theme ?? "pi's builtin"}`);
+      console.error(`screen: pi's chat viewport over pi-durable's entries paints=${screenRun?.paints ?? 0} submitted=${screenRun?.submitted ?? 0} cancelled=${screenRun?.cancelled ?? 0} quit=${screenRun?.quit ?? "-"} theme=${screenRun?.theme ?? "pi's builtin"} slash=${Object.entries(slashTally).map(([side, count]) => `${side}=${count}`).join(" ") || "none"} decisions=${slashNames || "none"}`);
     } else if (tui) {
       const tuiRun = await writerTui(parts, argsFor, reader, { keystrokes: interactive });
       // Naming the palette pi supplied, so a demo can assert pi's colours reached the rows above rather
@@ -491,6 +655,19 @@ async function writerTui(parts, args, reader, { keystrokes = false } = {}) {
   const flushTyped = async () => {
     while (typed.length) {
       const line = typed.shift();
+      // pi decides what a finished draft MEANS before it submits anything (`setupEditorSubmitHandler`
+      // in dist/modes/interactive/interactive-mode.js matches the draft against pi's builtin slash table
+      // and pi's `!`/`!!` bash rule), and src/slashplane.mjs reads that rule off pi's pinned dist rather
+      // than remembering it. A command this harness cannot honour is refused BY NAME in pi's own words;
+      // a decision that is NOT pi's fallthrough is NOT an admission - pi's own clear-the-draft rule
+      // (`clearEditor()`: setText("") and nothing else) clears it without submitting, which is what keeps
+      // `writerSubmit` the ONE mutation line even on a slash line.
+      const decision = await dispatchLine(line, parts, { context: parts.context, report: (out) => console.error(out) });
+      if (decision.handled !== "fallthrough") {
+        for (const out of decision.lines) console.error(out);
+        if (decision.handled === "quit") return { quit: decision.quit };
+        continue;
+      }
       if (keystrokes && quitWords.includes(line.trim().toLowerCase())) {
         typed.length = 0;
         return { quit: "quit" };
@@ -528,7 +705,9 @@ async function writerTui(parts, args, reader, { keystrokes = false } = {}) {
       if (keystrokes) await driver.tickIfDirty();
     }
     const sent = await flushTyped();
-    if (keystrokes && sent?.quit) { quit = sent.quit; break; }
+    // A slash `/quit` leaves on either path, so `quit` reaches `driver.quit` below and the ordinary
+    // cleanup (close the Harness, release the claim) runs - the same exit ESC or Ctrl+C takes.
+    if (sent?.quit) { quit = sent.quit; break; }
     if (answer.quit) { quit = answer.quit; break; }
     await driver.poll(Date.now());
   }

@@ -81,6 +81,11 @@ export async function agentPlane(opts = {}) {
 	const resolvedRef = wantedRef
 	? resolveModelRef(runtime, wantedRef, opts.defaultProvider ?? "faux", opts.defaultModelId ?? "faux-1")
 	: null;
+	// A run that asked for a real model in settings that name NO default says so too: a silent faux
+	// fallback would make an offline script look like a real answer.
+	if (opts.realModel && !wantedRef) {
+		warnings.push({ scope: "model", message: "pi's settings name no default model (defaultProvider + defaultModel), and this run asked for a real model: pi-ai's faux plane answers it, and no model is invented here" });
+	}
 	if (resolvedRef && !models.getModel(resolvedRef.provider, resolvedRef.modelId)) {
 		// A ref that does not resolve is REPORTED, and the run keeps the ref it asked for: pi-ai's auth/generation
 		// layer then says why it cannot answer. Silently substituting faux here is what makes a typo look like
