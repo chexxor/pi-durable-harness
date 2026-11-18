@@ -43,7 +43,7 @@ import { join } from "node:path";
 
 const PI_PKG = join("@earendil-works", "pi-coding-agent");
 const DOCS = ["packages.md", "extensions.md", "rpc.md", "rpc-commands.md", "json.md", "message-types.md", "tui.md",
-	"rpc-extension-ui.md", "session-format.md", "cli.md", "sessions.md", "compaction.md", "slash-commands.md"];
+	"rpc-extension-ui.md", "session-format.md", "cli.md", "sessions.md", "compaction.md", "slash-commands.md", "keybindings.md", "configuration.md"];
 // pi's extension docs import across four packages, so the grounding vocabulary does too: a name pi's pinned
 // release ships anywhere in these packages is a real API, and a name it ships nowhere is prose or an example.
 const DIST_PKGS = ["pi-coding-agent", "pi-ai", "pi-tui", "chord"];
@@ -188,6 +188,60 @@ for (const token of sectionLines("extensions.md", "Events", 2)) {
  const heading = /^#{1,6} /.test(token) ? token.replace(/^#{1,6} /, "") : null;
  if (!heading) continue;
  for (const name of heading.split("/")) if (/^[a-z][a-z0-9_]*(_[a-z0-9]+)+$/.test(name.trim())) push("extensions.md", name.trim(), "pi's Events section (a documented handler event)", true, false);
+}
+
+// ---- keybindings.md: every ACTION ID pi's own keybinding registry binds ----
+// pi's keybinding tables write the ids as backticked cells, and an id is a verb in pi's registry rather than
+// a symbol, so the grounding gate is pi's OWN tables: the keys of pi-tui's `TUI_KEYBINDINGS`/`KEYBINDINGS`
+// (dist/keybindings.js + keybindings.d.ts) and pi-coding-agent's `APP_KEYBINDINGS`/`KEYBINDINGS`
+// (dist/core/keybindings.js + keybindings.d.ts). An id pi's docs write that its tables do not carry is an
+// example or a rename, so it is not a requirement - and if pi's tables stop carrying ANY ids, the pin changed
+// shape and a list typed here would be a guess, so this throws rather than quietly narrowing the scope.
+const PI_KEYBINDING_IDS = (() => {
+ const ids = new Set();
+ for (const pkg of ["pi-tui", "pi-coding-agent"]) {
+  for (const file of ["dist/keybindings.js", "dist/keybindings.d.ts", "dist/core/keybindings.js", "dist/core/keybindings.d.ts"]) {
+   let text;
+   try { text = readFileSync(join("node_modules", "@earendil-works", pkg, file), "utf8"); } catch { continue; }
+   for (const match of text.matchAll(/"((?:tui|app)\.[A-Za-z][A-Za-z0-9_.]*)"\s*:/g)) ids.add(match[1]);
+  }
+ }
+ if (ids.size < 40) throw new Error(`pi's keybinding registry tables carry ${ids.size} action ids - the pin changed shape, and a list typed here would be a guess`);
+ return ids;
+})();
+
+// pi's keybinding reference writes each action id as the FIRST backticked cell of a table row. docTokens()
+// is not used here on purpose: pi's own doc spells a literal backtick in its "Key syntax" section, which
+// desynchronises any whole-file backtick pairing, so the harvest walks the table rows instead.
+// An action id and a config PATH have to be named WHOLE by a matrix row: `namedInMatrix` falls back to the
+// last dotted component, which for `tui.editor.undo` would let an unrelated row that names `undo` count as
+// covering pi's undo key - so these two harvests are checked against the exact id/path only.
+const EXACT_HARVEST = new Set();
+
+for (const line of readFileSync(join("node_modules", PI_PKG, "docs", "keybindings.md"), "utf8").split("\n")) {
+ const cell = line.match(/^\|\s*`((?:tui|app)\.[A-Za-z][A-Za-z0-9_.]*)`\s*\|/);
+ if (cell && PI_KEYBINDING_IDS.has(cell[1])) { push("keybindings.md", cell[1], "an action id pi's keybinding reference documents (and pi's own keybinding registry binds)"); EXACT_HARVEST.add(cell[1]); }
+}
+
+// ---- configuration.md: every path pi's configuration tables say it reads ----
+// pi's Path tables write the path as a backticked first-column cell. The grounding gate is pi shipping the
+// FILE NAME (the basename) as a quoted literal in its pinned dist, which is what makes `<agent-dir>/themes/`
+// a real read rather than a doc example; the capability is the full path pi writes, so a row has to name the
+// path pi names, not just a basename.
+const CONFIG_SECTIONS = ["Agent directory", "Project `.pi` directory", "Context files"];
+for (const section of CONFIG_SECTIONS) {
+ for (const line of sectionLines("configuration.md", section, 2)) {
+  const cell = line.startsWith("|") ? line.split("|")[1] : "";
+  for (const match of cell.matchAll(/`([^`]+)`/g)) {
+   const token = match[1].trim();
+   if (!/^(<agent-dir>|\.pi)\/[A-Za-z0-9_.-]+\/?$/.test(token)) continue;
+   const parts = token.split("/").filter(Boolean);
+   const base = parts[parts.length - 1] ?? token;
+   if (!(LITERALS.has(base) || LITERALS.has(`/${base}`))) continue; // pi's pinned release does not ship that file name
+   push("configuration.md", token, `a path pi's ${section} table says it reads (grounded on pi shipping ${base})`, true);
+   EXACT_HARVEST.add(token);
+  }
+ }
 }
 
 // ---- packages.md: manifest kinds and package commands ----
@@ -395,6 +449,12 @@ const perDoc = {};
 for (const row of rows) {
  const bucket = perDoc[row.doc] ??= { covered: 0, total: 0 };
  bucket.total += 1;
+ if (EXACT_HARVEST.has(row.capability)) {
+  if (MATRIX_NAMES.has(row.capability)) { bucket.covered += 1; continue; }
+  (bucket.uncovered ??= []).push(`${row.capability} (${row.gate})`);
+  uncovered.push(row);
+  continue;
+ }
  if (namedInMatrix(row.capability)) { bucket.covered += 1; continue; }
  if (row.viaCode && usedInCode(row.capability)) { bucket.covered += 1; continue; }
  (bucket.uncovered ??= []).push(`${row.capability} (${row.gate})`);

@@ -42,6 +42,7 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { openStore, listConversations } from "./readapi.mjs";
 import { openHarness, scriptTurn } from "./core.mjs";
 import { agentPlane } from "./agentplane.mjs";
+import { fauxPlaneRefusal } from "./providers.mjs";
 import { expandInput } from "./promptplane.mjs";
 import { commandNames, handle } from "./rpc.mjs";
 
@@ -183,6 +184,27 @@ export async function priorLines(storePath, context = BACKGROUND_CONTEXT) {
 }
 
 /**
+ * The who-answers rule, checked on the INTENT record (a spelling, before any open): `--faux` names
+ * pi-ai's faux plane as this run's answer, so `--model` on such a run may only name an id in THAT
+ * plane - a bare id, or a `faux/` prefix, or an explicit `--provider faux`. Any other provider is
+ * refused, in src/providers.mjs' sentence, which src/rpc.mjs' `set_model` gate prints for a mid-run
+ * switch too. This is STRICTER than src/providers.mjs' prefix rule: a prefix pi's registry does not
+ * know would otherwise resolve to provider faux with an invented model id, and a `--faux` run gets
+ * neither a real provider nor an id pi's model plane never heard of. cli.mjs calls this BEFORE it
+ * claims the store, so a refused run never leaves a lock claiming one; harnessInvocation calls it for
+ * every other caller (RPC, attach), so no surface can skip the rule.
+ */
+export function openAnswerRefusal(opened) {
+	if (!opened?.faux || !opened?.model) return null;
+	const ref = String(opened.model);
+	const cut = ref.indexOf("/");
+	const provider = cut > 0 ? ref.slice(0, cut) : (opened.provider ?? "faux");
+	if (provider === "faux") return null;
+	const modelId = cut > 0 ? ref.slice(cut + 1) : ref;
+	return fauxPlaneRefusal(provider, modelId);
+}
+
+/**
  * The ONE harness invocation: every surface and every verb goes through here, once per process.
  * It opens through src/core.mjs (storage -> registry -> tools -> env -> Harness.open -> root
  * conversation), then applies the session VERB to that same open:
@@ -201,6 +223,14 @@ export async function priorLines(storePath, context = BACKGROUND_CONTEXT) {
  */
 export async function harnessInvocation(flags, { extraExtensions = [], additionalResourcePaths = {}, context = BACKGROUND_CONTEXT } = {}) {
 	const opened = intent(flags, { cwd: flags?.cwd ?? process.cwd() });
+	// THE WHO-ANSWERS RULE, ENFORCED BEFORE THE OPEN, not only at a mid-run switch. MEASURED at this pin
+	// BEFORE the fix: `--model strata/qwen3.8-flash-next-iq3_s --faux probe` opened with pi's REAL ModelRef
+	// (`get_state` answered {"provider":"strata","modelId":"qwen3.8-flash-next-iq3_s"}) with pi-ai's faux
+	// script armed beside it, so the run reached pi's provider plane while claiming to be an offline one
+	// and the scripted reply never entered. An offline proof that reached an endpoint is a lie, so the
+	// combination is refused here, in the sentence src/rpc.mjs' `set_model` gate already prints.
+	const answerRefusal = openAnswerRefusal(opened);
+	if (answerRefusal) throw new Error(answerRefusal);
 	const prior = await priorLines(opened.store, context);
 	// Reopen is measured, not remembered: a second invocation in one directory reopens the store the
 	// first one committed, and that is what `-c`/`--resume` are for.

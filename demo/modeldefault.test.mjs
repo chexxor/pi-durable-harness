@@ -38,7 +38,7 @@ import { claimWriter, releaseWriter, readOwner } from "../src/ownership.mjs";
 import { harnessInvocation, settleInvocation } from "../src/cli-intent.mjs";
 import { piSettings } from "../src/settings.mjs";
 import { agentPlane } from "../src/agentplane.mjs";
-import { lookupModel } from "../src/providers.mjs";
+import { lookupModel, fauxPlaneRefusal } from "../src/providers.mjs";
 import { piDockLoop } from "../src/tui/pidockloop.mjs";
 import { TuiAltScreen, stripTerminalSequences } from "@earendil-works/pi-tui";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
@@ -221,6 +221,37 @@ const fauxRun = await dockRun({ parts: fauxParts, feed: "/quit", sink: fauxSink 
  record(!readOwner(rowStore).owned,
   "the child process that claimed the row surface released its own claim before exiting, so the store is reclaimable",
   `owner=${JSON.stringify(readOwner(rowStore))}`);
+
+ // 8) WHERE pi's `--model` and pi-ai's `--faux` MEET, and why that meeting is refused at OPEN rather
+// than resolved twice: `--faux <reply>` TAKES the scripted reply, so the evidence must spell `--model <ref>`
+// BEFORE `--faux <reply>` (measured: `--faux --model X` swallows `--model` into the script).
+ const refusedModel = "strata/qwen3.8-flash-next-iq3_s";
+ const shared = fauxPlaneRefusal(...refusedModel.split("/")); // ONE sentence, one source, both gates
+ const refusedStore = join(dir, "refused.sqlite");
+ const rpcRefused = await runScript(CLI,
+  ["--mode", "rpc", "--store", refusedStore, "--cwd", dir, "--model", refusedModel, "--faux", marker],
+  { stdin: '{"type":"get_state"}\n' });
+ record(rpcRefused.exit === 1 && rpcRefused.stderr.includes(shared) && !existsSync(refusedStore) && !readOwner(refusedStore).owned,
+  "a `--faux` run that also names pi's `--model <real ref>` is refused at OPEN: exit 1, pi's plane named in the sentence, NO store written and NO claim left",
+  `exit=${rpcRefused.exit} store=${existsSync(refusedStore)} owner=${JSON.stringify(readOwner(refusedStore))} stderr=${JSON.stringify(rpcRefused.stderr.trim())}`);
+ const rowRefused = await runScript(CLI,
+  ["--store", refusedStore, "--cwd", dir, "--tui", "--keystroke-input", "--model", refusedModel, "--faux", marker],
+  { stdin: "/quit\\r" });
+ record(rowRefused.exit === 1 && rowRefused.stderr.includes(shared),
+  "the row surface refuses the SAME spelling in the SAME sentence, so one rule decides who answers on every surface",
+  `exit=${rowRefused.exit} stderr=${JSON.stringify(rowRefused.stderr.trim())}`);
+ const rpcSwitch = await runScript(CLI,
+  ["--mode", "rpc", "--store", join(dir, "switched.sqlite"), "--cwd", dir, "--faux", marker],
+  { stdin: `{"type":"set_model","provider":"strata","modelId":"qwen3.8-flash-next-iq3_s"}\n` });
+ record(rpcSwitch.stdout.includes(`"error":"set_model: ${shared}"`),
+  "the mid-session `set_model` gate names the SAME sentence, so the open-time refusal and the in-session one cannot drift",
+  `stdout=${JSON.stringify(rpcSwitch.stdout.trim())}`);
+ const fauxKept = await runScript(CLI,
+  ["--mode", "rpc", "--store", join(dir, "fauxref.sqlite"), "--cwd", dir, "--faux", marker, "--model", "faux/faux-1"],
+  { stdin: '{"type":"get_state"}\n' });
+ record(fauxKept.exit === 0 && fauxKept.stdout.includes('"provider":"faux"'),
+  "the refusal is narrow, not a ban: a `--faux` run may still name pi-ai's own plane, and get_state answers it",
+  `exit=${fauxKept.exit} stdout=${JSON.stringify(fauxKept.stdout.trim())}`);
 }
 
 await main();

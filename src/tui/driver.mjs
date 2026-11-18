@@ -36,6 +36,10 @@ export const DRIVER_KEYS = {
  refresh: ["r", Key.ctrl("r")],
  submit: ["enter", Key.enter],
  cancel: [Key.esc],
+ // pi's own arrow keybinding names (dist/keybindings.js `tui.editor.cursorUp`/`cursorDown`, whose default
+ // keys are pi's own KeyId words `up`/`down` from dist/keys.d.ts), so a history move is spelled in pi's
+ // vocabulary and a run never compares a raw `\x1b[A` here.
+ history: [Key.up, Key.down],
 };
 
 /** Decode one stdin chunk into key pieces, through pi-tui's OWN parser (dist/keys.d.ts `parseKey`).
@@ -78,12 +82,23 @@ export function decodeKeys(chunk) {
  *   down there (pi-tui's own screens own that work)
  * @param {number} [opts.pollMs] - the SYNC plane re-read bound when nothing else changed
  * @param {function} [opts.onInput] - (typedLine) => void, what the entrypoint does with a submitted line
+ * @param {array} [opts.history] - pi's prompt-history SEED, oldest first (pi's `addToHistory` order, so the
+ *   LAST entry handed over is the newest at index 0 and pi's up-arrow reads it first). A surface that shows
+ *   the user previous prompts - the row-view TUI - hands pi-durable's committed `pi.user` prompts here, and
+ *   every prompt THIS session submits is pushed through pi's own history rule, which is what makes pi's up-
+ *   arrow recall answer instead of typing an escape sequence into the line.
  * @param {boolean} [opts.quitOnBareQ] - is a bare `q` a quit? Durian-Pi's headless key machine says yes,
  *   and the headless demos keep that answer. A USER-facing interactive window says no: a chat line has
  *   to be able to start with the letter q, so ESC and Ctrl+C are the quits there and the entrypoint
  *   turns a submitted line of `q`/`quit` into the same exit.
+ * @param {boolean} [opts.refreshOnBareR] - is a bare `r` on an empty line the refresh command? Durian-Pi's
+ *   headless key machine says yes and the scripted demos keep that answer; a USER-facing interactive window
+ *   says no, because a chat line legally STARTS with `r` ("run the tests"), and there only pi's own Ctrl+R
+ *   refreshes - the same split `quitOnBareQ` draws for `q`, and defaults to it. Measured: with a bare `r`
+ *   claimed on a real terminal, the typed prompt "remember the number seven" reached the agent as
+ *   `emember the number seven`, i.e. the first letter was eaten. Kept for the headless demos only.
  */
-export function createUiDriver({ getSize, readState, paint, onExit = () => {}, pollMs = 500, onInput = () => {}, color = false, quitOnBareQ = true } = {}) {
+export function createUiDriver({ getSize, readState, paint, onExit = () => {}, pollMs = 500, onInput = () => {}, history = [], color = false, quitOnBareQ = true, refreshOnBareR = quitOnBareQ } = {}) {
  let running = false;
  let painted = 0;
  let lastPaintAt = null;
@@ -92,6 +107,9 @@ export function createUiDriver({ getSize, readState, paint, onExit = () => {}, p
  const marks = [];
  const view = createViewMode();
  const typedOut = [];
+ // pi's seed goes through pi's own history rule (see ./viewmode.mjs), in oldest-first order, so pi's newest-
+ // first list ends with the newest prompt at index 0, which is what pi's up-arrow reads first.
+ for (const text of history) view.noteHistory(text);
 
  const mark = (reason) => {
   dirty = true;
@@ -116,7 +134,7 @@ export function createUiDriver({ getSize, readState, paint, onExit = () => {}, p
    // quits) is kept for the empty-line case, spelled with pi-tui's own Key names.
    if (matchesKey(raw, Key.esc) || matchesKey(raw, Key.ctrl("c"))) return { quit: id };
    if (idle && quitOnBareQ && id === "q") return { quit: id };
-   if (idle && (id === "r" || matchesKey(raw, Key.ctrl("r")))) {
+   if (idle && (refreshOnBareR && id === "r" || matchesKey(raw, Key.ctrl("r")))) {
     mark("refresh (one immediate tick)");
     continue;
    }
@@ -125,8 +143,30 @@ export function createUiDriver({ getSize, readState, paint, onExit = () => {}, p
     if (submitted.typed) {
      typedOut.push(submitted.typed);
      onInput(submitted.typed);
+     // pi adds a submitted prompt to its history AFTER the submission (pi's `addToHistory` doc: "Called after
+     // successful submission."), which is what lets up-arrow find it again.
+     view.noteHistory(submitted.typed);
     }
     mark("input submitted");
+    continue;
+   }
+   // pi's up/down arrow answer at an input surface is its PROMPT HISTORY, not a cursor move on a blank field:
+   // `tui.editor.cursorUp` -> `navigateHistory(-1)` (dist/components/editor.js), and pi browses when the draft
+   // is empty or browsing is already under way (pi's rule: `isOnFirstVisualLine() && (isEditorEmpty() ||
+   // historyIndex > -1 || cursorCol === 0)`). This overlay has ONE line and no caret, so the states it can
+   // PROVE are exactly pi's empty-draft case and pi's browsing case; an arrow over a line that already has
+   // text is pi's cursor move, and on a one-line overlay it has nowhere to go - so it marks a repaint but
+   // types NOTHING, which is the fix for the user's report of escape bytes landing in the prompt.
+   if (matchesKey(raw, Key.up) || matchesKey(raw, Key.down)) {
+    const browsing = view.browsing > -1;
+    const up = matchesKey(raw, Key.up);
+    const canBrowse = browsing || view.mode !== "input" || !view.typed;
+    if (canBrowse && (up || browsing)) {
+     const recalled = view.recallHistory(up ? -1 : 1);
+     mark(recalled.browsed ? "history recalled" : `history: ${recalled.why}`);
+     continue;
+    }
+    mark("cursor move on a one-line overlay (nowhere to go)");
     continue;
    }
    // Any other key belongs to the input overlay: the TUI itself never writes durable state (a viewer reads;
@@ -180,6 +220,7 @@ export function createUiDriver({ getSize, readState, paint, onExit = () => {}, p
   if (result.typed) {
    typedOut.push(result.typed);
    onInput(result.typed);
+   view.noteHistory(result.typed);
   }
   mark("input submitted");
   return result;
@@ -207,6 +248,7 @@ export function createUiDriver({ getSize, readState, paint, onExit = () => {}, p
   cancelInput,
   quit,
   view,
+  get history() { return view.history; },
   get painted() { return painted; },
   get dirty() { return dirty; },
   get marks() { return marks.slice(); },

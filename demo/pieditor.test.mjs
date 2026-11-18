@@ -16,12 +16,16 @@
 // capability matrix rather than silently: pi's `InteractiveMode`/`AgentSessionRuntime`, pi's
 // `autocomplete` provider, pi's model/thinking cycling, pi's `widgetsAbove`/`widgetsBelow`.
 //
-// WHY python3 APPEARS BELOW: Node has no pty primitive, so python3's standard-library `pty` module
-// allocates the terminal for the ONE pty check; the code under test stays a normal Node child process
-// whose stdio is the pty's slave side. A pty is a local kernel object, not a socket, so this demo stays
+// WHY A PTY AT ALL, AND WHY scripts/ptydrive.mjs: Node has no pty primitive and the harness must not add a
+// dependency for a test, so the ONE pty check goes through the committed helper scripts/ptydrive.mjs, which
+// allocates the terminal with python3's standard-library `pty` module and writes ONE keystroke per pty write,
+// spaced (--after the first paint, then --gap) the way a human types. It replaced an inline allocator here that
+// wrote both feeds within ~0.2 s of each other and of the first paint, which raced the submitted draft's paint
+// (the draft was typed but never visible in the capture). The code under test never sees python: it is a normal
+// Node child whose stdio is the pty's slave side, and a pty is a kernel object, not a socket, so the run stays
 // inside the offline proof (pi-ai's faux plane answers; no provider endpoint is contacted).
 import { spawn } from "node:child_process";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { tmpdir } from "node:os";
@@ -81,63 +85,32 @@ async function storeUserTexts(storePath) {
  return texts;
 }
 
-const PY = String.raw`
-import json, os, pty, tty, subprocess, select, sys, time, signal
-argv = json.loads(sys.argv[1]); feeds = [bytes.fromhex(x) for x in sys.argv[2].split(",")]
-master, slave = pty.openpty()
-proc = subprocess.Popen(argv, stdin=slave, stdout=slave, stderr=slave, preexec_fn=lambda: tty.setraw(slave))
-os.close(slave)
-out = b""; sent = 0; t0 = time.time()
-# Feed the keystrokes, reading whatever the child paints, and stop as soon as the child leaves.
-while time.time() - t0 < 20:
-  try:
-    if select.select([master], [], [], 0.2)[0]:
-      chunk = os.read(master, 65536)
-      if not chunk: break
-      out += chunk
-  except OSError: break
-  # pi-tui's start() negotiates the keyboard protocol and raw mode before any keystroke is taken;
-  # a human's first keystroke always arrives after that, so the feeds wait for the first paint.
-  if sent < len(feeds) and time.time() - t0 > 1.5:
-    os.write(master, feeds[sent]); sent += 1
-  if proc.poll() is not None: break
-# Still alive after the feeds: send the ordinary interrupt, which the child handles by running its
-# normal cleanup (release the claim, close the Harness) - never a kill-9 that skips cleanup.
-if proc.poll() is None:
-  proc.send_signal(signal.SIGTERM)
-  t0 = time.time()
-  while time.time() - t0 < 6 and proc.poll() is None:
-    try:
-      if select.select([master], [], [], 0.1)[0]:
-        chunk = os.read(master, 65536)
-        if not chunk: break
-        out += chunk
-    except OSError: break
-# Bounded drain only: an unbounded os.read here waits forever when the child already left.
-t0 = time.time()
-while time.time() - t0 < 3:
-  try:
-    if select.select([master], [], [], 0.1)[0]:
-      chunk = os.read(master, 65536)
-      if not chunk: break
-      out += chunk
-  except OSError: break
-sys.stdout.write(json.dumps({"exit": proc.wait(timeout=5), "stream": out.decode("utf-8", "replace")}))
-`.trim();
-
-async function inTerminal(argv, feeds) {
- const child = spawn("python3", ["-c", PY, JSON.stringify(argv), feeds.join(",")], { cwd: ROOT, stdio: ["pipe", "pipe", "pipe"] });
+/**
+ * The committed pty driver: scripts/ptydrive.mjs. Helper flags go BEFORE `--`, the child argv AFTER (measured
+ * gotcha: a flag after `--` belongs to the child). Keystrokes travel as `--feed-hex` so the exact bytes (ENTER is
+ * \r, pi's up arrow is ESC[A) reach the pty without any shell's interpretation. The helper writes ONE keystroke per
+ * pty write and hands back `PREFIX.screen` (raw painted bytes, where pi's own cursor control is still visible)
+ * plus `PREFIX.plain`, unescaped with pi-tui's OWN `stripTerminalSequences` - so "what the child painted" is read
+ * the same way every other paint claim in this repo reads it.
+ */
+async function driveTerminal(argv, feeds, capture) {
+ const args = [join(ROOT, "scripts", "ptydrive.mjs"), "--capture", capture, "--timeout", "40", "--after", "1.5", "--gap", "0.6", "--quiet", "--json"];
+ for (const hex of feeds) args.push("--feed-hex", hex);
+ args.push("--", ...argv);
+ const helper = spawn("node", args, { cwd: ROOT, stdio: ["pipe", "pipe", "pipe"] });
  let out = "";
  let err = "";
- child.stdout.on("data", (chunk) => { out += chunk.toString(); });
- child.stderr.on("data", (chunk) => { err += chunk.toString(); });
- await new Promise((done) => child.once("exit", done));
- if (child.exitCode !== 0) return { exit: null, stream: "", error: `pty helper exited ${child.exitCode}: ${err.slice(0, 200)}` };
+ helper.stdout.on("data", (chunk) => { out += chunk.toString(); });
+ helper.stderr.on("data", (chunk) => { err += chunk.toString(); });
+ await new Promise((done) => helper.once("exit", done));
+ if (helper.exitCode !== 0) return { exit: null, sent: null, screen: "", plain: "", error: `pty helper exited ${helper.exitCode}: ${err.slice(0, 200)}` };
+ const summary = out.split("\n").map((line) => line.trim()).filter((line) => line.startsWith("{"));
+ if (!summary.length) return { exit: null, sent: null, screen: "", plain: "", error: `pty helper answered without its JSON summary: ${out.slice(0, 200)}` };
  try {
-  const parsed = JSON.parse(out);
-  return { exit: parsed.exit, stream: parsed.stream, error: null };
+  const parsed = JSON.parse(summary[0]);
+  return { exit: parsed.exit, sent: parsed.sent, screen: readFileSync(`${capture}.screen`, "utf8"), plain: readFileSync(`${capture}.plain`, "utf8"), error: null };
  } catch (err2) {
-  return { exit: null, stream: "", error: `pty helper answered unparseably: ${String(err2?.message ?? err2)}` };
+  return { exit: null, sent: null, screen: "", plain: "", error: `pty helper answered unparseably: ${String(err2?.message ?? err2)}: ${out.slice(0, 200)}` };
  }
 }
 
@@ -211,12 +184,19 @@ async function main() {
   "pi's Editor handed a finished draft to pi-durable's admission exactly twice for two ENTERs",
   `drafts=${JSON.stringify(tally.drafts)} submitted=${tally.submitted}`);
 
- // 4) exactly-once, by pi-durable's admission: the same draft typed twice is ONE committed row.
+ // 4) pi's OWN submission rule at the dock: ENTER finishes a draft, and EVERY finished draft is a NEW prompt -
+ // pi's dist/modes/interactive/interactive-mode.js `setupEditorSubmitHandler` calls `session.prompt(text)` once per
+ // ENTER, and pi's `Editor.addToHistory` doc says it is "Called after successful submission", so the SAME words sent
+ // twice are TWO admissions, TWO pi-durable submissionIds and TWO committed pi.user rows. pi-durable's exactly-once
+ // admission still answers where a caller hands over its OWN requestId (src/rpc.mjs' `msg.requestId ?? msg.id`,
+ // src/attach.mjs' client round-trip, counted in demo/tui.test.mjs and demo/cli.test.mjs); what the TUI's fallback
+ // names is the SUBMISSION EVENT (src/tui/writer.mjs), not the words. pi's OWN history still holds the draft ONCE,
+ // because pi's addToHistory body skips a CONSECUTIVE duplicate - asserted as `piHistory` further below.
  const requestIds = (tally.acks ?? []).map((ack) => ack?.requestId);
  const userTexts = await storeUserTexts(store);
- record(new Set(requestIds).size === 1 && userTexts.filter((text) => text === draft).length === 1,
-  "the same draft typed twice landed as ONE user row on the store (pi-durable admits by requestId)",
-  `requestIds=${JSON.stringify(requestIds)} rows=${userTexts.filter((text) => text === draft).length}`);
+ record(new Set(requestIds).size === 2 && new Set((tally.acks ?? []).map((ack) => ack?.submissionId)).size === 2 && userTexts.filter((text) => text === draft).length === 2,
+  "two ENTERs finished the same draft twice, and pi's rule makes that TWO admissions with TWO submissionIds and TWO committed pi.user rows (a recalled resubmission is a new prompt, not a no-op)",
+  `requestIds=${JSON.stringify(requestIds)} rows=${userTexts.filter((text) => text === draft).length} piHistory=${JSON.stringify(tally.piHistory.filter((text) => text === draft).length)}`);
  record(!userTexts.some((text) => text.includes("half typed")) && tally.cancelled === 1,
   "ESC cancelled through pi's own onEscape, and nothing carrying the half-typed draft was committed",
   `cancelled=${tally.cancelled} users=${JSON.stringify(userTexts)}`);
@@ -266,10 +246,13 @@ async function main() {
   "no row carries the old row-view's INPUT_MARK: the dock is pi's component, not the harness's own line",
   `rows=${paintedRows.length}`);
 
- // 7) pi's Editor history is seeded from pi-durable's committed user entries.
- record(tally.history.includes("the settled question"),
-  "pi's Editor history seed is pi-durable's committed user entries, not a remembered list",
-  `history=${JSON.stringify(tally.history)}`);
+ // 7) pi's Editor history is seeded from pi-durable's committed user entries, and pi's OWN `history` array
+ // (reached only through pi's PUBLIC addToHistory) is what up-arrow reads - see demo/recall.test.mjs for the
+ // recall itself, and see pi's `EditorOptions`/`CustomEditorOptions`, which carry NO history option at this
+ // pin, for why the seed travels through pi's method rather than through a constructor argument.
+ record(tally.history.includes("the settled question") && tally.piHistory[0] === draft && tally.piHistory.filter((text) => text === draft).length === 1 && tally.piHistory.includes("the settled question"),
+  "pi's OWN `Editor.history` is newest-first (the draft typed twice is ONE entry) above pi-durable's committed seed, and pi's seed is the store's rows, not a remembered list",
+  `piHistory=${JSON.stringify(tally.piHistory)} seed=${JSON.stringify(tally.history)}`);
 
  // 7b) the startup header says WHICH session this is, and names the store it reads/writes. Both lines
  // are derived inside pidockloop.mjs from what THIS invocation opened (parts.intent.store + parts.backend),
@@ -291,10 +274,10 @@ async function main() {
 
  // 8) the exit keys run the ORDINARY cleanup, which releases ownership.
  const ctrlDRun = await piDockLoop({ parts, ui, size: () => ({ columns: WIDTH, rows: TALL }), context: BACKGROUND_CONTEXT, keystrokes: true, reader: () => ["\u0004"], report: (line) => process.stderr.write(`${line}\n`) });
- const ctrlCRun = await piDockLoop({ parts, ui, size: () => ({ columns: WIDTH, rows: TALL }), context: BACKGROUND_CONTEXT, keystrokes: true, reader: () => ["\u0003"], report: (line) => process.stderr.write(`${line}\n`) });
- record(ctrlDRun.quit === "ctrl+d" && ctrlCRun.quit === "ctrl+c" && ctrlDRun.submitted === 0 && ctrlCRun.submitted === 0,
-  "Ctrl+D on an empty draft and Ctrl+C both leave through pi's own key, and neither commits input",
-  `quits=${JSON.stringify([ctrlDRun.quit, ctrlCRun.quit])} submitted=${JSON.stringify([ctrlDRun.submitted, ctrlCRun.submitted])}`);
+ const ctrlCRun = await piDockLoop({ parts, ui, size: () => ({ columns: WIDTH, rows: TALL }), context: BACKGROUND_CONTEXT, keystrokes: true, reader: () => ["\u0003", "\u0003"], report: (line) => process.stderr.write(`${line}\n`) });
+ record(ctrlDRun.quit === "ctrl+d" && ctrlCRun.quit === "ctrl+c" && ctrlCRun.clears.length === 1 && ctrlDRun.submitted === 0 && ctrlCRun.submitted === 0,
+  "pi's OWN double-tap rule (handleCtrlC, interactive-mode.js:3594): the FIRST Ctrl+C (app.clear) clears the draft through pi's clearEditor and keeps typing alive, only the SECOND inside 500 ms leaves; Ctrl+D on an empty draft leaves, and neither commits input",
+  `quits=${JSON.stringify([ctrlDRun.quit, ctrlCRun.quit])} clears=${JSON.stringify(ctrlCRun.clears)} submitted=${JSON.stringify([ctrlDRun.submitted, ctrlCRun.submitted])}`);
  await settleInvocation(parts);
  await parts.harness.close(BACKGROUND_CONTEXT);
  const released = releaseWriter(store);
@@ -316,26 +299,33 @@ async function main() {
   "the pty run's store carries a settled turn committed through the ordinary print path before the terminal opens",
   `seedExit=${seed.exit} seedAnswer=${seed.out.trim().slice(0, 60)}`);
  const typedTerminal = "typed in the terminal";
- const ptyRun = await inTerminal(["node", join(ROOT, "demo", "pieditor-interactive.mjs"), "--store", ptyStore, "--cwd", dir, "--faux", marker, "--width", "72", "--height", "20"],
-  [Buffer.from(`${typedTerminal}\r`).toString("hex"), Buffer.from("quit\r").toString("hex")]);
- record(ptyRun.error === null && ptyRun.exit === 0,
+ const ptyCapture = join(dir, "pty-run");
+ const ptyRun = await driveTerminal(["node", join(ROOT, "demo", "pieditor-interactive.mjs"), "--store", ptyStore, "--cwd", dir, "--faux", marker, "--width", "72", "--height", "20"],
+  [Buffer.from(`${typedTerminal}\r`).toString("hex"), Buffer.from("quit\r").toString("hex")], ptyCapture);
+ record(ptyRun.error === null && ptyRun.exit === 0 && ptyRun.sent === 2,
   "the pi dock driver started, took terminal keystrokes, and exited cleanly under an allocated pty",
-  `exit=${ptyRun.exit} bytes=${ptyRun.stream.length} error=${ptyRun.error ?? "-"}`);
- const ptyText = stripTerminalSequences(ptyRun.stream);
+  `exit=${ptyRun.exit} keystrokesWritten=${ptyRun.sent} paintedBytes=${ptyRun.screen.length} error=${ptyRun.error ?? "-"}`);
+ // scripts/ptydrive.mjs already unescaped its capture with pi-tui's OWN stripTerminalSequences (`plain`), and
+ // keeps the raw bytes in `screen` so pi's per-frame cursor control is still countable there.
+ const ptyText = ptyRun.plain;
 
- const ptyHidden = (ptyRun.stream.match(/\[\?25l/g) ?? []).length;
+ const ptyHidden = (ptyRun.screen.match(/\[\?25l/g) ?? []).length;
  record(ptyText.includes(boxRule) && ptyText.includes(typedTerminal) && ptyHidden > 0,
   "under a real pty pi's dock drew its borders, echoed the typed keystrokes, and kept pi's own cursor control",
   `rule=${ptyText.includes(boxRule)} typed=${ptyText.includes(typedTerminal)} hiddenCursorFrames=${ptyHidden}`);
  record(/[0-9.]+\s*%\s*\/\s*[0-9.]+k/.test(ptyText) && /[↑↓][0-9]/.test(ptyText) && /[RW][0-9]/.test(ptyText),
   "under an allocated terminal pi's footer prints committed-token and cache words plus its context%/contextWindow pair",
   `words=${JSON.stringify(ptyText.match(/[0-9.]+\s*%\s*\/\s*[0-9.]+k/g)?.slice(0, 2))} arrows=${/[↑↓][0-9]/.test(ptyText)}`);
- record(ptyRun.stream.split(/\r|\n/).filter((line) => line.includes("submitted:")).length === 1,
-  "one terminal keystroke line became exactly one submission acknowledged by the dock",
-  `acks=${ptyRun.stream.split(/\r|\n/).filter((line) => line.includes("submitted:")).length}`);
- record(/session: [^\r\n]*quit=quit/.test(ptyRun.stream) || /session: [^\r\n]*word=quit/.test(ptyRun.stream),
+ // pi's alt screen overpaints the FRONT of the driver's stderr lines as it repaints, so these claims match pi-durable's
+ // own words anywhere in the paint (the identity triple, and the summary tail) rather than a line prefix.
+ const ptyAcks = [...ptyText.matchAll(/requestId=(\S+) submissionId=(\d+) status=(\w+)/g)];
+ record(ptyAcks.length === 1 && ptyAcks[0]?.[3] === "placed",
+  "one terminal keystroke line became exactly ONE submission acknowledged by the dock (the bare `quit` line admitted nothing)",
+  `acks=${JSON.stringify(ptyAcks.map((m) => m[0]))}`);
+ const ptyLeave = /[^\r\n]*cancelled=\d+[^\r\n]*/.exec(ptyText) ?? [""];
+ record(/cancelled=\d+ quit=quit/.test(ptyText),
   "the driver named WHY it left, so the quit path is visible rather than inferred",
-  `leave=${(/session: [^\r\n]*/.exec(ptyRun.stream) ?? [""])[0].slice(0, 160)}`);
+  `leave=${JSON.stringify(ptyLeave[0].slice(-160))}`);
  record(!readOwner(ptyStore).owned,
   "the pty driver's ordinary cleanup released the store it owned (no lock left behind)",
   `owner=${JSON.stringify(readOwner(ptyStore))}`);
@@ -343,6 +333,57 @@ async function main() {
  record(ptyTexts.filter((text) => text === typedTerminal).length === 1 && !ptyTexts.includes("quit"),
   "the pty-typed line is committed exactly once, and the quit line never became agent input",
   `users=${JSON.stringify(ptyTexts)}`);
+
+ // 8) pi's OWN expansion boundary at the dock: a `/template args` draft and a `/skill:name args` draft
+// enter the agent as pi's EXPANDED text (docs/prompt-templates.md: "Pi expands the template before the
+// resulting text enters the agent"; dist/core/agent-session.js does `_expandSkillCommand` then
+// `expandPromptTemplate` and returns `prompt: expandedText`), while pi's HISTORY keeps the typed draft
+// (pi calls `this.editor.addToHistory?.(text)` with the TYPED text before `session.prompt(text)`). What
+// this demo caught BEFORE: the expansion was computed only to look for a refusal and the expanded text was
+// thrown away, so `/review concurrency` reached the agent as the literal name.
+ const cwd = mkdtempSync(join(tmpdir(), "dh-pieditor-cwd-"));
+ mkdirSync(join(cwd, ".pi", "prompts"), { recursive: true });
+ writeFileSync(join(cwd, ".pi", "prompts", "review.md"), "---\ndescription: Review staged git changes\nargument-hint: \"[focus]\"\n---\nReview the staged changes. Focus on ${1:-correctness, security, and error handling}. All args: $@\n");
+ mkdirSync(join(cwd, ".pi", "skills", "note-skill"), { recursive: true });
+ writeFileSync(join(cwd, ".pi", "skills", "note-skill", "SKILL.md"), "---\nname: note-skill\ndescription: Take notes on demand\n---\n# Note skill\nSay NOTES when asked.\n");
+ const expStore = join(cwd, "exp.sqlite");
+ const expClaim = claimWriter(expStore);
+ const expParts = await harnessInvocation({ store: expStore, cwd, faux: marker, messages: [] }, { context: BACKGROUND_CONTEXT });
+ const expLines = [];
+ const expUi = new TuiAltScreen(captureTerminal(WIDTH, TALL, []), false, undefined);
+ expUi.start();
+ const expTally = await piDockLoop({
+  parts: expParts,
+  ui: expUi,
+  size: () => ({ columns: WIDTH, rows: TALL }),
+  context: BACKGROUND_CONTEXT,
+  keystrokes: true,
+  reader: () => [...Array.from("/review concurrency"), "\r", ...Array.from("/skill:note-skill do the thing"), "\r", ...Array.from("/quit"), "\r"],
+  report: (line) => expLines.push(line),
+ });
+ expUi.clear();
+ expUi.requestRender();
+ expUi.stop();
+ await settleInvocation(expParts);
+ const expTexts = await storeUserTexts(expStore);
+ record(expTally.expansions.join(",") === "template,skill",
+  "pi's dock expanded pi's template and pi's skill rather than submitting the typed name",
+  `kinds=${JSON.stringify(expTally.expansions)} templates=${(expParts.resources?.promptTemplates ?? []).length} skills=${(expParts.resources?.skills ?? []).length}`);
+ record(expTexts.some((text) => text.startsWith("Review the staged changes.") && text.includes("Focus on concurrency")) && !expTexts.some((text) => text.startsWith("/review")),
+  "the committed row IS pi's expanded template (its `argument-hint` arg filled pi's `${1}`), never the literal `/review concurrency`",
+  `users=${JSON.stringify(expTexts.map((text) => text.slice(0, 60)))}`);
+ record(expTexts.some((text) => text.startsWith('<skill name="note-skill"') && text.endsWith("do the thing")),
+  "the skill draft entered as pi's OWN skill block (pi's `stripFrontmatter` body, the skill named, references relative to its baseDir) with the args appended",
+  `users=${JSON.stringify(expTexts.filter((text) => text.startsWith("<skill")).map((text) => `${text.slice(0, 40)}...${text.slice(-16)}`))}`);
+ record(expLines.some((line) => line.startsWith("expanded pi's template") && line.includes("into the submitted input")) && expLines.some((line) => line.startsWith("expanded pi's skill")),
+  "the dock SAYS it expanded, in the same sentence the print path and the row surface print (pi itself expands silently)",
+  `report=${JSON.stringify(expLines.filter((line) => line.startsWith("expanded")))}`);
+ record(expTally.piHistory[0] === "/skill:note-skill do the thing" && expTally.piHistory.includes("/review concurrency"),
+  "pi's history machine kept the TYPED drafts newest-first, exactly as pi's `addToHistory?.(text)` call site does it before expansion",
+  `piHistory=${JSON.stringify(expTally.piHistory)}`);
+ record(releaseWriter(expStore) && !readOwner(expStore).owned,
+  "the expansion run cleaned up after itself: settled, closed, claim released",
+  `claim=${expClaim.mode} owner=${JSON.stringify(readOwner(expStore))}`);
 
  const failed = checks.filter((check) => !check.ok);
  console.log(`pieditor: ${checks.length - failed.length}/${checks.length} checks passed`);

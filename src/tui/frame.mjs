@@ -30,6 +30,7 @@
 
 import { Container, compositeTuiLine, Text, TruncatedText, visibleWidth } from "@earendil-works/pi-tui";
 import { frameRows, headerRow, entryRow, streamingRows, footerRow, rowWidth } from "./rows.mjs";
+import { applyThemeToRows } from "./theme.mjs";
 
 /** One text row as a pi-tui component that truncates to the terminal width instead of wrapping. */
 export function rowComponent(row, { width = Infinity } = {}) {
@@ -75,14 +76,47 @@ export function paint(frame, { width = 80, height = Infinity } = {}) {
 }
 
 /**
+ * The frame rows with the INPUT OVERLAY laid over one of them.
+ *
+ * Compositing here, and colouring the draft BEFORE compositing it, is what keeps pi's palette on the
+ * line the user is typing: src/tui/theme.mjs `applyThemeToRows` colours a row that STARTS with
+ * `INPUT_MARK`, and pi-tui's own `compositeTuiLine` wraps whatever it composites in its own escapes,
+ * so a surface that themed the whole frame afterwards leaves that already-escaped row alone (theme.mjs'
+ * own rule: a row that carries an escape introducer keeps the colours it was built with). `overlay` is
+ * an input machine answering `mode` ("input" while the user is typing) and `overlayRow(base, { width })`
+ * - see ./viewmode.mjs; `theme`, when handed over, paints just the draft with pi's palette. `overlayRow`'s
+ * `cover` makes the typed row own the whole row it stands on, so the frame row underneath never shows
+ * through the middle of a word. While the overlay is closed the rows come back untouched: the frame UNDER
+ * it stays whole, and the next paint rebuilds it (the header's rule).
+ */
+export function withInputOverlay(rows, overlay = null, { width = 80, at = 1, theme = null } = {}) {
+ const list = (Array.isArray(rows) ? rows : []).map(String);
+ if (!overlay || overlay.mode !== "input" || !list.length) return list;
+ const index = Math.max(0, Math.min(Math.floor(Number(at)), list.length - 1));
+ const out = list.slice();
+ const draft = String(overlay.overlayRow(out[index], { width }) ?? "");
+ const coloured = theme ? applyThemeToRows([draft], theme, { inputMark: INPUT_MARK }).lines[0] : draft;
+ out[index] = overlayRow(out[index], coloured, { width, at: 0, cover: true });
+ return out;
+}
+
+/**
  * One frame from the sync state, in one call: rows -> components -> lines.
  *
  * `limit` is the row budget (the terminal's height minus header/footer); the transcript rows are the
  * tail, which is what a client wants when it can only show the newest stretch - pi-durable's own
  * `ConversationWindow` decides what the window holds, this only decides what paints.
+ *
+ * `overlay`/`overlayAt` lay an input machine over one row (see `withInputOverlay`), so BOTH `rows` and
+ * `painted.lines` carry what the user actually sees while typing - a row surface whose typed draft is
+ * never painted is a surface the user types blind. `theme` colours just that draft with pi's palette.
  */
-export function renderFrame(sync, { width = 80, height = 24, limit = null, conversationId = sync.conversationId } = {}) {
- const rows = frameRows({ ...sync, width, ...(limit === null ? {} : { limit }) });
+export function renderFrame(sync, { width = 80, height = 24, limit = null, conversationId = sync.conversationId, overlay = null, overlayAt = 1, theme = null } = {}) {
+ const rows = withInputOverlay(
+  frameRows({ ...sync, width, ...(limit === null ? {} : { limit }) }),
+  overlay,
+  { width, at: overlayAt, theme },
+ );
  const frame = buildFrame(rows, { width });
  return { rows, frame, painted: paint(frame, { width, height }) };
 }
@@ -96,9 +130,11 @@ export function renderFrame(sync, { width = 80, height = 24, limit = null, conve
  * @returns {string} the composited line, through pi-tui's own `compositeTuiLine`
  *   (dist/tui.d.ts: "Composite overlay content into a terminal line at a fixed column")
  */
-export function overlayRow(base, overlay, { width = 80, at = 0 } = {}) {
+export function overlayRow(base, overlay, { width = 80, at = 0, cover = false } = {}) {
  const text = String(overlay ?? "");
- return compositeTuiLine(String(base ?? ""), text, at, Math.min(visibleWidth(text), width), width);
+ // `cover` asks pi-tui's own compositing for the whole row (overlayWidth === width), so a short typed
+ // draft never leaves the row underneath showing through the middle of a word.
+ return compositeTuiLine(String(base ?? ""), text, at, cover ? width : Math.min(visibleWidth(text), width), width);
 }
 
 /** The overlay prompt mark - reported here so a demo can assert what the user sees while typing. */

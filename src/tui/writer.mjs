@@ -45,9 +45,11 @@ export async function openWriterView(parts, { conversationId = parts.conversatio
  state,
  watch,
  conversationId,
- // One paint's rows, from the current state: the same renderFrame the viewer uses.
+ // One paint's rows, from the current state: the same renderFrame the viewer uses. `overlay`/`overlayAt`
+ // go straight through, so the row surface paints the line the user is typing over one frame row.
  read: async () => snapshotSync(state, { conversationId }),
- paint: async ({ width = 80, height = 24 } = {}) => renderFrame(state, { width, height, conversationId }),
+ paint: async ({ width = 80, height = 24, overlay = null, overlayAt = 1, theme = null } = {}) =>
+  renderFrame(state, { width, height, conversationId, overlay, overlayAt, theme }),
  stop: async () => await watch.stop(),
  };
 }
@@ -62,11 +64,29 @@ export async function openWriterView(parts, { conversationId = parts.conversatio
  * `whenBusy` is pi-durable's word for "the conversation is already running": a typed line while a
  * run is live steers that run, which is pi's interactive behaviour (`Esc` interrupts, typing
  * steers) with pi-durable's queue instead of pi's message queue.
+ *
+ * WHAT THE FALLBACK `requestId` NAMES (measured, and this is the fix for "up-arrow recalls the last
+ * prompt I typed" landing no second row): pi-durable's `requestId` is a SUBMISSION identity, not a
+ * text fingerprint - `admitSubmission()` returns the EXISTING submission for a requestId already on
+ * the Session line (node_modules/@earendil-works/pi-durable/dist/harness/submissions.js). Deriving it
+ * from the typed words therefore makes the SECOND time a user sends the same words a no-op: a prompt
+ * typed and then recalled by pi's up-arrow and sent again printed `status=done` on the FIRST
+ * submissionId and committed ONE `pi.user` row, so the recalled turn never happened. pi's own rule is
+ * the other way round: every finished draft is a new prompt (dist/modes/interactive/interactive-mode.js
+ * `setupEditorSubmitHandler` calls `session.prompt(text)` once per ENTER, and pi's `Editor.addToHistory`
+ * doc says it is "Called after successful submission."), so this fallback names the SUBMISSION EVENT -
+ * one fresh id per typed line this process sends, keyed by pi-durable's own `process.pid` scope. The
+ * admission rule itself is unchanged and stays reachable: a caller that must resend ONE logical
+ * submission hands over its own stable `requestId` (src/rpc.mjs' `msg.requestId ?? msg.id`, src/attach.mjs'
+ * client round-trip) and pi-durable still answers with the EXISTING submission, which is what demo/tui
+ * and demo/cli count. Nothing here opens storage and nothing else mutates.
  */
+let submissionEvent = 0;
 export async function writerSubmit(parts, text, { context = BACKGROUND_CONTEXT, requestId = null, whenBusy = "steer" } = {}) {
  if (!String(text ?? "").trim()) return { skipped: "nothing was typed" };
- // One id per process per typed line, so a resend of the SAME line is the SAME submission.
- const key = String(requestId ?? `tui:${process.pid}:${String(text).trim()}`);
+ // One fresh id per submission EVENT this process sends; an explicit requestId stays pi-durable's own
+ // exactly-once key (see above), so a caller that retries one logical submission still lands once.
+ const key = String(requestId ?? `tui:${process.pid}:${(submissionEvent += 1)}`);
  const submission = await parts.conversation.submit({ type: "input", content: String(text), requestId: key, ...(whenBusy ? { whenBusy } : {}) }, context);
  // The run this input started has to answer before the process closes, so the caller's
  // settleInvocation waits on it - the same list cli.mjs' print path feeds.

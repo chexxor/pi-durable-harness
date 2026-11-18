@@ -5,6 +5,8 @@
 // follows is the pinned package's own interactive layer, read on THIS machine at pin v1.5.1:
 //   node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/chat-viewport.js  (createChatViewport)
 //   node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/components/*.js   (message/tool/footer components)
+//   node_modules/@earendil-works/pi-tui/dist/autocomplete.js                              (CombinedAutocompleteProvider, pi's dropdown recipe)
+//   node_modules/@earendil-works/pi-tui/dist/components/editor.d.ts                     (EditorOptions, Editor.setAutocompleteProvider/setAutocompleteMaxVisible, Editor.addToHistory)
 //   node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/theme/theme.js    (the theme slot pi's components read)
 // plus pi's own docs (themes.md for a theme JSON's `vars`/`colors`, session-format.md for entry shapes).
 //
@@ -26,7 +28,7 @@
 import { AssistantMessageComponent, calculateContextTokens, CompactionSummaryMessageComponent, CustomMessageComponent, CustomEditor, FooterComponent, SkillInvocationMessageComponent, Theme, ToolExecutionComponent, UserMessageComponent, getMarkdownTheme, getSelectListTheme, initTheme, keyHint } from "@earendil-works/pi-coding-agent";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { Box, Container, KeybindingsManager, ScrollView, Spacer, TUI_KEYBINDINGS, Text, VStack } from "@earendil-works/pi-tui";
+import { Box, CombinedAutocompleteProvider, Container, KeybindingsManager, ScrollView, Spacer, TUI_KEYBINDINGS, Text, VStack } from "@earendil-works/pi-tui";
 import { AssistantEntry, CompactionEntry, ResetEntry, SystemEntry, ToolResultEntry, UserEntry } from "@earendil-works/pi-durable";
 
 /** The two global slots pi's theme proxy reads (theme/theme.js `THEME_KEY`, `THEME_KEY_OLD`), so
@@ -89,9 +91,15 @@ export function piEditorTheme() {
 }
 
 /** pi's input dock: pi's `CustomEditor` with pi-tui's own keybindings, so pi draws the caret, the
- * bordered box, the history and the keybinding hints. */
-export function piEditorDock(ui, { history = [] } = {}) {
- return new CustomEditor(ui, piEditorTheme(), new KeybindingsManager(TUI_KEYBINDINGS), { history });
+ * bordered box, the draft history and pi's keybinding hints. pi's history is NOT an option here and never
+ * was: pi's `EditorOptions` at this pin carry only `paddingX`/`autocompleteMaxVisible` (dist/components/editor.d.ts:29)
+ * and pi's `CustomEditorOptions` add only `embedWorkingStatus` (pi-coding-agent
+ * dist/modes/interactive/components/custom-editor.d.ts:4 and :21), so pi's own history list is pi's internal
+ * `history` field, fed only through pi's PUBLIC `addToHistory` (see that export below). Handing pi a
+ * `{ history }` 4th ctor arg feeds a constructor that DROPS it - measured as up-arrow answering
+ * `status=nothing was typed` over a store that already had committed prompts. */
+export function piEditorDock(ui) {
+ return new CustomEditor(ui, piEditorTheme(), new KeybindingsManager(TUI_KEYBINDINGS));
 }
 
 /** pi's OWN app-key table (ESC cancels, Ctrl+D exits an empty draft, Ctrl+C clears): `APP_KEYBINDINGS`
@@ -134,10 +142,30 @@ function readPiAppKeybindings() {
  * custom-editor.js), and `app.clear` (ctrl+c) fires the handler registered by `onAction`. `conflicts` is pi-tui's
  * own report of keys pi uses for two actions at once (ESC is cancel AND close, ctrl+c is copy AND clear) - the
  * harness does not resolve them silently, it shows what pi saw. */
-export function piDockOf(ui, { history = [], userBindings = null, appKeys = ["app.interrupt", "app.exit", "app.clear"] } = {}) {
+/** pi's dock WITH pi's autocomplete dropdown: pi's `EditorOptions` at this pin carry only
+ * `paddingX`/`autocompleteMaxVisible` (dist/components/editor.d.ts:29), so the provider is installed
+ * through pi's PUBLIC `Editor.setAutocompleteProvider` (line 85), which is exactly what pi's own
+ * `setupAutocompleteProvider()` does, and pi's `"/"`-at-start-of-line trigger is already pi's own
+ * hardcoded rule in `Editor.handleInput` (dist/components/editor.js: `if (char === "/" && this.isAtStartOfMessage()) this.tryTriggerAutocomplete()`),
+ * so no trigger character is spelled here. `fdPath` stays null ON PURPOSE: pi's `CombinedAutocompleteProvider`
+ * then offers no file-path items (measured at this pin: `getSuggestions(["@x"],0,2)` and `["@"],0,1` and
+ * `["./"],0,2` are all null while `["/mo"],0,3` returns the command item), which is the capability matrix's
+ * refusal of pi's file-path completion BY NAME, not a menu pi hides. `autocompleteCommands` is pi's own
+ * SlashCommand list from src/slashplane.mjs' `piAutocompleteCommands()`; with it null the editor keeps
+ * pi's own no-provider behaviour (`requestAutocomplete()` returns immediately), which is the before-state
+ * the capability matrix records. */
+export function piDockOf(ui, { userBindings = null, appKeys = ["app.interrupt", "app.exit", "app.clear"], autocompleteCommands = null, cwd = null, autocompleteMaxVisible = null } = {}) {
  const definitions = { ...TUI_KEYBINDINGS, ...piAppKeyDefaults({ only: appKeys }) };
  const keybindings = new KeybindingsManager(definitions, userBindings === null ? undefined : userBindings);
- return { editor: new CustomEditor(ui, piEditorTheme(), keybindings, { history }), keybindings, conflicts: keybindings.getConflicts() };
+ // pi's own option ladder: the ONLY fields pi reads at this pin. There is no `history` among them, which is
+ // why the seed in src/tui/pidockloop.mjs goes through pi's PUBLIC `addToHistory` rather than an argument here.
+ const editor = new CustomEditor(ui, piEditorTheme(), keybindings, {
+  ...(autocompleteMaxVisible ? { autocompleteMaxVisible } : {}),
+ });
+ if (autocompleteCommands) {
+  editor.setAutocompleteProvider(new CombinedAutocompleteProvider(autocompleteCommands, String(cwd ?? ""), null));
+ }
+ return { editor, keybindings, conflicts: keybindings.getConflicts() };
 }
 
 /** One committed pi-durable entry as pi's own components, oldest-first inside the entry.
@@ -345,18 +373,32 @@ export function piContextOf(entries, models, ref) {
  return { tokens, contextWindow: window, percent: window ? Math.round((tokens / window) * 1000) / 10 : 0 };
 }
 
-/** The model pi's footer prints: the reference the run resolved, plus the context window and the
- * reasoning flag from pi's OWN model record (pi's footer shows `custom`/`pro` markers it reads there).
- * A faux plane answers with its own record, so an offline run shows the faux model rather than naming
- * pi's settings default as if an endpoint spoke (src/cli-intent.mjs says the same thing on stderr). */
-export function piModelOf(parts) {
- const ref = parts?.intent?.model ? { provider: parts.intent.provider ?? "faux", model: parts.intent.model }
-  : parts?.modelRef ?? parts?.agent?.model ?? { provider: "faux", model: "faux-1" };
+/** The model pi's footer prints: the reference the conversation answers with NOW, plus the context
+ * window and the reasoning flag from pi's OWN model record (pi's footer shows `custom`/`pro` markers
+ * it reads there). A faux plane answers with its own record, so an offline run shows the faux model
+ * rather than naming pi's settings default as if an endpoint spoke (src/cli-intent.mjs says the same
+ * thing on stderr).
+ * `{ agent }` is pi-durable's `Conversation.agent()` record, handed in by the dock loop AFTER each
+ * paint: a `/model` at the dock changes the conversation's own ModelRef through
+ * `conversation.configure({ model })`, so the NEXT prompt answers from it and a header/footer that
+ * kept naming the open-time model would name a model that did not answer. `modelRef` is pi's provider
+ * plane's OWN resolution of a `--model provider/id` ref (src/providers.mjs' `resolveModelRef`), which
+ * is what names a ref's provider; a bare `intent.model` spelling does NOT, so its prefix is taken
+ * only when pi's own Models plane knows that provider - the same test `resolveModelRef` makes. Only
+ * a surface that ran neither plane falls back to pi-ai's faux plane. */
+export function piModelOf(parts, { agent = null } = {}) {
+ const ref = agent?.model ?? parts?.modelRef ?? parts?.agent?.model
+  ?? (parts?.intent?.model ? { provider: parts.intent.provider, model: parts.intent.model } : null)
+  ?? { provider: "faux", model: "faux-1" };
  // pi-durable's ModelRef names a model with `modelId` (dist/harness/types.d.ts), pi's own `--model` flag
  // says `model`, and this file's own answer says `id`, so all three spellings resolve here - and the
  // window is pi's ModelRecord's, never a size typed here.
- const modelId = String(ref.model ?? ref.modelId ?? ref.id ?? "");
- const provider = String(ref.provider ?? "");
+ const named = String(ref.model ?? ref.modelId ?? ref.id ?? "");
+ const cut = named.indexOf("/");
+ const prefixed = cut > 0 && (parts?.models?.getProviders?.() ?? []).includes(named.slice(0, cut));
+ const split = !String(ref.provider ?? "") && prefixed;
+ const modelId = split ? named.slice(cut + 1) : named;
+ const provider = String(ref.provider ?? "") || (split ? named.slice(0, cut) : "faux");
  const record = parts?.models?.getModel?.(provider, modelId) ?? null;
  return { id: modelId, provider, contextWindow: record?.contextWindow ?? 0, reasoning: record?.reasoning ?? false };
 }
@@ -372,6 +414,20 @@ export function piGitBranchOf(cwd) {
  } catch {
   return null;
  }
+}
+
+/** pi's PUBLIC prompt-history API: `Editor.addToHistory(text)` (pi-tui dist/components/editor.d.ts:90,
+ * whose doc says "Add a prompt to history for up/down arrow navigation. Called after successful submission."),
+ * inherited by pi's `CustomEditor` from pi-tui's exported `Editor`. pi's own body (dist/components/editor.js)
+ * trims, skips empty text, skips a consecutive duplicate, `unshift`s - so the NEWEST prompt lands at index 0,
+ * which is what pi's up-arrow reads first - and caps the list at 100. pi has NO history CONSTRUCTOR option at
+ * this pin, so both seeding and pushing go through THIS method; a pin that stops shipping it throws here
+ * rather than silently dropping what the user typed. */
+export function piAddToHistory(editor, text) {
+ if (typeof editor.addToHistory !== "function") {
+  throw new Error(`pi's Editor.addToHistory is missing from the dock at this pin - up-arrow history cannot be served by anything here`);
+ }
+ editor.addToHistory(text);
 }
 
 /** pi's entry SHAPES, which are not pi-durable's: pi's FooterComponent totals ONLY the rows its own

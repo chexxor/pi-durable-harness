@@ -8,6 +8,12 @@
 // to a component), so there is nothing there to extract. Symbols VERIFIED AGAINST PINED packages, read
 // on this machine at pin v1.5.1:
 //   pi-tui `Editor.handleInput`, `Editor.getText/setText`, `Editor.onSubmit`, `Editor.onChange` (dist/components/editor.d.ts)
+//   pi's PUBLIC history API `Editor.addToHistory` (pi-tui dist/components/editor.d.ts:90, whose doc says
+//   "Add a prompt to history for up/down arrow navigation. Called after successful submission."), pi's recall
+//   rule `navigateHistory` over `history`/`historyIndex` and its arrow keybinding `tui.editor.cursorUp`
+//   (pi-tui dist/components/editor.js + dist/keybindings.js), and the MEASURED fact that pi's `EditorOptions`
+//   at this pin carry only `paddingX`/`autocompleteMaxVisible` and pi's `CustomEditorOptions` add only
+//   `embedWorkingStatus`, so pi has NO history constructor option and a `{ history }` 4th ctor arg is dropped
 //   pi-coding-agent `CustomEditor.onEscape/onCtrlD/onAction` (dist/modes/interactive/components/custom-editor.d.ts)
 //   pi's app-key defaults `app.interrupt`/`app.exit`/`app.clear` (dist/core/keybindings.d.ts `APP_KEYBINDINGS`)
 //   pi's clear-the-draft rule `editor.setText("")` (dist/modes/interactive/interactive-mode.js `clearEditor`)
@@ -16,9 +22,12 @@
 //   pi-durable's entry/usage/live reads (dist/entries.d.ts, dist/harness/harness.d.ts, dist/harness/live.d.ts)
 // DROPPED from pi's own interactive layer, on purpose and named in the capability matrix rather than
 // silently: pi's `InteractiveMode`/`AgentSessionRuntime` (there is no pi session here), pi's
-// `autocomplete` provider, pi's model/thinking cycling (`app.model.*`, `app.thinking.*`: this harness
-// picks its model once at open, so cycling would change state pi-durable never recorded), pi's
-// `app.suspend`, and pi's `widgetsAbove`/`widgetsBelow` extension widgets (no pi extension UI here).
+// `autocomplete` provider is now HONOURED at the dock below (pi's own `CombinedAutocompleteProvider`
+// installed through pi's PUBLIC `Editor.setAutocompleteProvider`, over pi's builtin slash table plus
+// what pi-durable's plane discovered), so what stays DROPPED here is pi's model/thinking cycling
+// (`app.model.*`, `app.thinking.*`: this harness picks its model once at open, so cycling would change
+// state pi-durable never recorded), pi's `app.suspend`, and pi's `widgetsAbove`/`widgetsBelow` extension
+// widgets (no pi extension UI here).
 //
 // WHAT THIS FILE DOES NOT DO: it does not open storage, claim the writer lock, close the Harness, or
 // decide what a keystroke means. Those stay with the caller and with pi's keybinding layer, which is
@@ -32,11 +41,13 @@ import { resolve } from "node:path";
 import { transcript } from "../core.mjs";
 import { createSyncState, openWatch, snapshotSync } from "./sync.mjs";
 import { writerSubmit } from "./writer.mjs";
-import { dispatchLine } from "../slashplane.mjs";
-import { entryText, installPiTheme, piContextOf, piDockOf, piFooterOf, piGitBranchOf, piHeaderOf, piLiveRows, piMarkdownTheme, piModelOf, piScreen, piSessionEntriesOf, piStatusRows, piTranscriptDocument } from "./piscreen.mjs";
+import { dispatchLine, piAutocompleteCommands, piAutocompleteMaxVisible } from "../slashplane.mjs";
+import { entryText, installPiTheme, piAddToHistory, piContextOf, piDockOf, piFooterOf, piGitBranchOf, piHeaderOf, piLiveRows, piMarkdownTheme, piModelOf, piScreen, piSessionEntriesOf, piStatusRows, piTranscriptDocument } from "./piscreen.mjs";
 
-/** How many previous committed prompts pi's Editor history starts with; pi's own history object is
- * unexported at this pin, so the seed is pi-durable's committed user entries, oldest first. */
+/** How many previous committed prompts pi's Editor history starts with; pi's history is UNEXPORTED at this
+ * pin (pi's `EditorOptions` has no history field), so the seed is pi-durable's committed user entries handed
+ * to pi through pi's PUBLIC `addToHistory`, oldest first, so pi's own `history.unshift` leaves the NEWEST at
+ * index 0, which is what pi's up-arrow reads (`historyIndex` -1 -> 0). */
 const HISTORY_SEED = 8;
 
 /** Install pi's discovered theme record for THIS run at pi's own theme slots, so pi's components - not
@@ -77,9 +88,9 @@ export function piSessionLines(parts) {
  * loaded, and pi's key hints spelled from pi-tui's own keybinding names. The store lines describe the
  * open THIS invocation made, so the marker cannot name a store another process owns.
  */
-export function piRunHeader(parts) {
+export function piRunHeader(parts, { agent = null } = {}) {
  const version = CURRENT_SESSION_VERSION;
- const model = piModelOf(parts);
+ const model = piModelOf(parts, { agent });
  const session = piSessionLines(parts);
  const resources = [
   ...(parts?.resources?.packages ?? []).map((found) => `package ${String(found?.name ?? found?.package ?? "")}`),
@@ -98,8 +109,8 @@ export function piRunHeader(parts) {
  * own `usage` records); pi's context numbers stay over pi-durable's EntryRecords, which is what piContextOf
  * reads; and the branch is piGitBranchOf() over the run cwd, which pi's footer.js appends as ` (${branch})`.
  * Every other field stays pi-durable's read of this conversation. */
-function piRunFooter({ parts, entries, ui, context }) {
- const model = piModelOf(parts);
+function piRunFooter({ parts, entries, ui, context, agent = null }) {
+ const model = piModelOf(parts, { agent });
  return piFooterOf({
   entries: piSessionEntriesOf(entries),
   conversationId: parts.conversation.id,
@@ -148,16 +159,37 @@ export async function piDockLoop({
  // any component is built.
  const themeName = piRunThemeOf(parts);
 
- // pi's Editor history seeded from pi-durable's committed user entries, oldest first.
- const seeded = Array.isArray(history) ? history : (await committed()).filter((entry) => entry?.kind === "pi.user").map((entry) => entryText(entry)).filter((text) => text).slice(-HISTORY_SEED);
+ // pi's Editor history seeded from pi-durable's committed user entries, OLDEST first (pi's `addToHistory`
+ // body is `history.unshift(trimmed)`, so the LAST one handed over ends up at index 0 = newest, which is
+ // what pi's up-arrow reads first). pi has NO history constructor option at this pin (see the header: pi's
+ // `EditorOptions`/`CustomEditorOptions` carry no such field, so a `{ history }` arg is silently dropped -
+ // measured as `status=nothing was typed` on up-arrow over a store that already had committed prompts), so
+ // the seed travels through pi's PUBLIC method below instead. A caller-supplied `history` list follows the
+ // same oldest-first convention; pi-durable's entry page is newest-first, so pi's NEWEST `HISTORY_SEED` user
+ // prompts are the page's first `HISTORY_SEED` user rows, reversed.
+ const seeded = Array.isArray(history) ? history : (await committed()).filter((entry) => entry?.kind === "pi.user").map((entry) => entryText(entry)).filter((text) => text).slice(0, HISTORY_SEED).reverse();
 
- const dock = piDockOf(ui, { history: seeded });
+ // pi's autocomplete list, built once after pi's theme is installed: pi's own dropdown recipe
+ // (dist/modes/interactive/interactive-mode.js `createBaseAutocompleteProvider`) runs over pi's builtin
+ // slash table plus pi's discovered templates, package extension commands and `skill:` rows, and pi's
+ // `model`/`thinking` argument menus answer from pi-durable's own candidate lists. What pi can offer and
+ // this harness cannot is named inside src/slashplane.mjs (pi's file-path completion, pi's `login` arguments).
+ const autocompleteCommands = await piAutocompleteCommands(parts, { cwd });
+
+ const dock = piDockOf(ui, { autocompleteCommands, cwd, autocompleteMaxVisible: piAutocompleteMaxVisible(cwd) });
  const editor = dock.editor;
+ // pi's seed path is pi's OWN method, not a constructor option pi does not have (see above): handing the
+ // committed prompts over in oldest-first order through `addToHistory` is what puts them in pi's `history`
+ // array in pi's own newest-first order, so pi's `tui.editor.cursorUp` -> `navigateHistory(-1)` rule has
+ // something to recall and up-arrow stops being a no-op.
+ for (const text of seeded) piAddToHistory(editor, text);
  const drafts = [];
  const seenDrafts = [];
  const slash = [];
  const cancelled = [];
  const seenCancels = [];
+ const seenExpansions = [];
+ const seenClears = [];
  const quit = { word: null };
  const acks = [];
  const paints = { count: 0 };
@@ -167,24 +199,42 @@ export async function piDockLoop({
  editor.onSubmit = (text) => { drafts.push(text); seenDrafts.push(text); };
  editor.onEscape = () => { cancelled.push("escape"); seenCancels.push("escape"); };
  editor.onCtrlD = () => { quit.word = quit.word ?? "ctrl+d"; };
- editor.onAction("app.clear", () => { quit.word = quit.word ?? "ctrl+c"; });
+ // pi's OWN double-tap rule, `handleCtrlC()` (pi-coding-agent dist/modes/interactive/interactive-mode.js:3594):
+ // the FIRST `app.clear` (ctrl+c) calls pi's `clearEditor()` and remembers when; only a SECOND one inside
+ // 500 ms shuts down. Before this the harness left on the FIRST ctrl+c, which is a different product's rule
+ // (pi keeps typing alive after one ctrl+c, which is also why pi's hint says `<key> twice to exit`).
+ let lastClearTime = 0;
+ editor.onAction("app.clear", () => {
+  const now = Date.now();
+  if (now - lastClearTime < 500) quit.word = quit.word ?? "ctrl+c";
+  else { lastClearTime = now; editor.setText(""); seenClears.push(dock.keybindings.getKeys("app.clear")); }
+ });
 
  // The live plane is pi-durable's own: pi-durable's watch delivers frames, and pi's status rows and
  // in-flight tool boxes are built from pi-durable's `pi.live` doc, never from a spinner written here.
  const liveState = watch ? createSyncState(parts.conversation.id) : null;
  const liveWatch = liveState ? await openWatch({ harness: parts.harness }, parts.conversation.id, { state: liveState, context }) : null;
 
- const headerParts = piRunHeader(parts).header;
+ // pi-durable's `Conversation.agent()` record is the model this conversation answers with NOW, and a
+ // `/model` at the dock changes it through `conversation.configure({ model })`, so the header and
+ // footer ask it again at every paint rather than freezing the model this invocation opened with -
+ // a frozen one would name a model that did not answer the NEXT prompt. This is a read through the
+ // conversation handle this run already holds; it opens no storage and admits nothing, and a read
+ // failure falls back to what pi's provider plane resolved at open (piModelOf's own rule).
+ const currentAgent = async () => {
+  try { return await parts.conversation.agent(context); } catch { return null; }
+ };
  const paint = async () => {
   const at = size();
   const entries = await committed();
+  const agent = await currentAgent();
   const live = liveState ? snapshotSync(liveState, { conversationId: parts.conversation.id }) : null;
   const pendingTools = {};
-  const built = piTranscriptDocument({ entries, ui, cwd, markdownTheme, pendingTools, prepend: headerParts });
+  const built = piTranscriptDocument({ entries, ui, cwd, markdownTheme, pendingTools, prepend: piRunHeader(parts, { agent }).header });
   for (const component of piLiveRows({ live: live?.live, pendingTools, ui, cwd })) built.document.addChild(component);
   const status = new Container();
   for (const row of piStatusRows(live?.live)) status.addChild(row);
-  const screen = piScreen({ document: built.document, editor, status, footer: piRunFooter({ parts, entries, ui, context }) });
+  const screen = piScreen({ document: built.document, editor, status, footer: piRunFooter({ parts, entries, ui, context, agent }) });
   ui.setLayoutRoot(screen.root);
   ui.invalidate();
   ui.requestRender();
@@ -225,8 +275,10 @@ export async function piDockLoop({
    // off pi's pinned dist by src/slashplane.mjs, so the answer below is pi's decision and not a list
    // remembered here; what it honours runs on pi-durable's ONE command handler (src/rpc.mjs' `handle()`),
    // what it cannot is refused BY NAME in pi's own words, and `/quit` clears the draft and leaves.
-   // A plain draft falls through UNCHANGED, so `submitDraft` (the caller's ONE admission) stays the only
-   // thing a typed line can become.
+   // A plain draft falls through to `submitDraft` (the caller's ONE admission), which stays the only thing
+   // a typed line can become; on a leading-`/` branch pi's OWN template/skill expansion is what enters that
+   // admission (src/slashplane.mjs' `expanded`, pi's boundary in docs/prompt-templates.md), never a second
+   // mutation line and never a re-implementation of the expansion.
    const decision = await dispatchLine(text, parts, { context, report: say });
    slash.push(decision);
    if (decision.handled !== "fallthrough") {
@@ -234,6 +286,10 @@ export async function piDockLoop({
     // pi's OWN clear-the-draft rule (`clearEditor()` in interactive-mode.js: setText("") and nothing
     // else), which is why a slash command is not an admission: nothing reaches submitDraft here.
     editor.setText("");
+    // pi adds a `!cmd`/`!!cmd` draft to ITS history BEFORE it runs the command (interactive-mode.js:2802),
+    // so up-arrow recalls a bash line the user ran. pi does NOT record the builtin slash commands it handles
+    // in the editor - that is pi's own rule about which call sites exist, not a menu this file hides.
+    if (decision.handled === "ran" && decision.kind === "bash") piAddToHistory(editor, text);
     if (decision.handled === "quit") { quit.word = decision.quit; return true; }
     continue;
    }
@@ -241,8 +297,18 @@ export async function piDockLoop({
     quit.word = quit.word ?? text.trim().toLowerCase();
     return true;
    }
-   const ack = await submitDraft(text, context);
+   // pi expands a prompt template and a skill command BEFORE the input enters the agent (dist/core/agent-session.js: `_expandSkillCommand` then `expandPromptTemplate`, and `prompt: expandedText`), so the ADMISSION takes pi's expansion. The hint below is the SAME sentence cli.mjs' print path and row surface already print (`expanded pi's <kind> (<name>) into the submitted input`), so the pi-style screen says what the other surfaces say.
+   if (decision.expansion === "template" || decision.expansion === "skill") {
+    say(`expanded pi's ${decision.expansion} (${text.split(/\s+/)[0].slice(1)}) into the submitted input`);
+    seenExpansions.push(decision.expansion);
+   }
+   const ack = await submitDraft(decision.expanded ?? text, context);
    acks.push(ack);
+   // pi's own history rule: pi's `Editor.addToHistory` doc says "Called after successful submission.", and pi
+   // calls it at pi's OWN submission sites (interactive-mode.js:2824 and pi's "Normal message submission"
+   // :2840). This is what makes pi's up-arrow recall the prompt the user just sent; a quit word never got
+   // here, so pi never records it, and a slash command never gets here either (pi's rule above).
+   piAddToHistory(editor, text);
    // pi's own clear-the-draft rule (`clearEditor()` in interactive-mode.js): setText(""), nothing else.
    editor.setText("");
    say(`submitted: requestId=${ack?.requestId} submissionId=${ack?.submissionId} status=${ack?.status ?? ack?.skipped}`);
@@ -289,6 +355,8 @@ export async function piDockLoop({
   theme: themeName,
   drafts: seenDrafts,
   slash,
+  expansions: seenExpansions,
+  clears: seenClears,
   caret,
   acks,
   submitted: acks.length,
@@ -296,6 +364,7 @@ export async function piDockLoop({
   quit: quit.word,
   paints: paints.count,
   history: seeded,
+  piHistory: editor.history.slice(),
   conflicts: dock.conflicts,
   keys: {
    submit: dock.keybindings.getKeys("tui.input.submit"),

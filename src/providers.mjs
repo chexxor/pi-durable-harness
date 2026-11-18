@@ -156,6 +156,17 @@ export function resolveModelRef(models, ref, defaultProvider = "faux", defaultMo
 }
 
 /**
+ * The ONE sentence for a run that spelled `--faux` and also named a model pi-ai's faux plane cannot
+ * answer: src/cli-intent.mjs' ONE who-answers rule (`realModel = !opened.faux`) makes pi-ai's faux
+ * plane the answerer, so a ref on pi's provider plane is refused rather than opened. src/cli-intent.mjs
+ * prints it at OPEN and src/rpc.mjs' `set_model` gate prints it for a mid-run switch, so the two
+ * cannot drift apart.
+ */
+export function fauxPlaneRefusal(provider, modelId) {
+	return `this run spelled --faux, so pi-ai's faux plane answers it; ${provider}/${modelId} would reach pi's provider plane instead`;
+}
+
+/**
  * The Model object behind a reference, or `undefined` when the registry does not know it.
  *
  * @temp: this returns `undefined` instead of throwing, because pi-ai's Models plane answers the same

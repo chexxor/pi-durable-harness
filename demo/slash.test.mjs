@@ -232,11 +232,37 @@ async function main() {
 
  // 9) an honoured verb that needs an argument refuses rather than guessing, and prints pi-durable's
 // candidates so the refusal is actionable.
+ // 9) bare /model HONOURS pi-durable's OWN listing verb (pi's model plane's candidates, no names typed
+//    here), `/model <ref>` writes the conversation's own Agent model, and an unknown ref is refused
+//    before it can be written - MEASURED: a ref pi's plane does not know leaves the NEXT prompt with no
+//    answer at all, so the gate answers before configure() runs.
  const modelless = await feed("/model");
- record(modelless.decision?.handled === "refused" && modelless.tally.submitted === 0
-  && (modelless.lines[0] ?? "").startsWith(`refused: /model - ${builtinOf.model.description}; pi asks for`),
-  "/model with no argument is refused with pi's own description rather than a guessed model",
+ const listed = (await handle(parts, { type: "get_available_models" }, null))?.data?.models ?? [];
+ record(modelless.decision?.handled === "ran" && modelless.tally.submitted === 0
+  && listed.length > 0 && listed.every((model) => modelless.lines.includes(`model: provider=${model.provider} id=${model.id}`))
+  && modelless.lines.some((line) => line.startsWith("get_available_models: models="))
+  && modelless.lines.some((line) => line.startsWith(`model: /model ${builtinOf.model.argumentHint}`)),
+  "bare /model lists pi-durable's get_available_models candidates and pi's own argumentHint, and admits nothing",
   `printed=${JSON.stringify(modelless.lines)}`);
+ const agentBefore = await parts.conversation.agent(BACKGROUND_CONTEXT);
+// pi's OWN ENTER rule, measured in pi-tui's dist/components/editor.js: while an autocomplete list is
+// showing, ENTER is `tui.select.confirm` - it applies the selected item and only falls through to submit
+// when pi's `autocompletePrefix` starts with `/` (a COMMAND completion). For an ARGUMENT completion (pi's
+// `model` row's getArgumentCompletions) pi applies the completion and RETURNS, so the ref needs pi's
+// second ENTER to run. The two ENTERs below are that rule, not a harness shortcut.
+ const switched = await feed("/model faux/faux-1\r");
+ const agentAfter = await parts.conversation.agent(BACKGROUND_CONTEXT);
+ record(switched.decision?.handled === "ran" && switched.tally.submitted === 0
+  && switched.lines.some((line) => /^set_model: provider=faux id=faux-1$/.test(line))
+  && agentAfter?.model?.modelId === "faux-1",
+  "the dock's /model <ref> (with pi's second ENTER, since pi's ENTER first accepts pi's argument completion) writes the conversation's own Agent.model through configure(), which is what piModelOf names in the header and footer",
+  `agentBefore=${JSON.stringify(agentBefore?.model)} agentAfter=${JSON.stringify(agentAfter?.model)} printed=${JSON.stringify(switched.lines)}`);
+ const badref = await feed("/model not/a-model");
+ const agentStill = await parts.conversation.agent(BACKGROUND_CONTEXT);
+ record(badref.tally.submitted === 0 && badref.lines.some((line) => line.startsWith("set_model: set_model must name"))
+  && agentStill?.model?.modelId === agentAfter?.model?.modelId,
+  "an unknown /model ref is refused with pi-durable's own error and leaves the answering model unchanged (no silent no-answer run)",
+  `printed=${JSON.stringify(badref.lines)} agent=${JSON.stringify(agentStill?.model)}`);
  const thinking = await feed("/thinking");
  const levels = (await handle(parts, { type: "get_available_thinking_levels" }, null))?.data?.levels ?? [];
  record(thinking.decision?.handled === "refused" && levels.length > 0

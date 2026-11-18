@@ -15,11 +15,32 @@
 // Why it stays a separate module, in Durian-Pi's own words: pure and headless "so the transitions are
 // testable without a terminal". Dropping the frame under an overlay is a bug a TTY makes painfully slow to
 // see; a demo sees it in one assert.
+//
+// ADDED for the row surface (up-arrow recalls the previous prompt, the user's fourth symptom): pi's own
+// prompt-history machine, spelled here because THIS machine is Durian-Pi's own overlay, not pi's component.
+// The rule is pi's, read off pi's pinned dist at v1.5.1 (pi-tui dist/components/editor.js), and pi's OWN
+// public API (`Editor.addToHistory`, pi-tui dist/components/editor.d.ts:90, whose doc says "Called after
+// successful submission") is what the pi-style SCREEN uses instead (see src/tui/piscreen.mjs' piAddToHistory):
+//   - pi's list is newest-first: pi's body is `text = text.trim(); if (!text) return;` then pi's no-consecutive-
+//     duplicate rule (`if (this.history.length > 0 && this.history[0] === trimmed) return;`) then
+//     `this.history.unshift(trimmed)`, capped at pi's own 100 entries (`this.history.pop()`).
+//   - pi's cursor is `historyIndex = -1` (not browsing), `0` = most recent, larger = older.
+//   - pi's recall is `navigateHistory(direction)`: it RETURNS when history is empty, moves with
+//     `newIndex = historyIndex - direction` (up is -1, so up DEEPENS the index), refuses out-of-range moves,
+//     captures pi's `historyDraft` when browsing first starts, and sets the line with
+//     `setTextInternal(history[historyIndex], "start")`; back at -1 pi restores the draft it had captured.
+//   - pi leaves browsing on submit and on setText (`exitHistoryBrowsing()`), so a recalled line that gets
+//     ENTERed is a fresh submission rather than a stuck browsing mode.
+// pi's arrow KEY is pi-tui's own keybinding name `tui.editor.cursorUp` (dist/keys.d.ts `KeyId`, pi's default
+// key `up`), which src/tui/driver.mjs matches through pi-tui's exported `matchesKey` with pi's own `Key.up` -
+// no escape byte is decoded here.
 
 import { INPUT_MARK } from "./frame.mjs";
 
 export const VIEW_CONVERSATION = "conversation";
 export const MODE_INPUT = "input";
+/** pi's own history size limit (pi-tui dist/components/editor.js: "Limit history size", 100). */
+export const PI_HISTORY_LIMIT = 100;
 
 /** Build the state machine: one view, plus the input overlay on top of it. */
 export function createViewMode(initial = VIEW_CONVERSATION) {
@@ -28,10 +49,40 @@ export function createViewMode(initial = VIEW_CONVERSATION) {
  let under = null;
  let open = false;
  let typed = [];
+ // pi's prompt-history state, kept as pi keeps it (see the header): a newest-first list, `browse` is pi's
+ // `historyIndex` (-1 = not browsing, 0 = newest) and `draft` is pi's `historyDraft`, the line the user was
+ // typing when browsing first began.
+ const historyList = [];
+ let browse = -1;
+ let draft = null;
  const machine = {
   get view() { return view; },
   get mode() { return open ? MODE_INPUT : "view"; },
   get typed() { return typed.join(""); },
+  get history() { return historyList.slice(); },
+  get browsing() { return browse; },
+  // pi's `addToHistory`, in pi's own order and pi's own rules.
+  noteHistory(text) {
+   const trimmed = String(text ?? "").trim();
+   if (!trimmed) return false;
+   if (historyList.length > 0 && historyList[0] === trimmed) return false;
+   historyList.unshift(trimmed);
+   if (historyList.length > PI_HISTORY_LIMIT) historyList.pop();
+   return true;
+  },
+  // pi's `navigateHistory(direction)`, in pi's own arithmetic: up is -1 and DEEPENS the index, down is +1
+  // and returns toward the newest, and back at -1 pi restores the draft it captured when browsing began.
+  recallHistory(direction) {
+   if (!historyList.length) return { browsed: false, why: "no history yet" };
+   const newIndex = browse - direction;
+   if (newIndex < -1 || newIndex >= historyList.length) return { browsed: false, why: "nothing further" };
+   if (browse === -1 && newIndex >= 0) draft = typed.join("");
+   browse = newIndex;
+   typed = browse === -1 ? [draft] : [String(historyList[browse] ?? "")];
+   if (!open) under = view;
+   open = true;
+   return { browsed: true, typed: typed.join("") };
+  },
   enterInput(text = "") {
    if (!open) under = view;
    open = true;
@@ -46,6 +97,9 @@ export function createViewMode(initial = VIEW_CONVERSATION) {
   // Esc cancels: the view UNDER the overlay comes back whole.
   cancel() {
    if (!open) return { view, canceled: true, typed: "" };
+   // pi leaves history browsing on setText, which is what a cancel does to the draft.
+   browse = -1;
+   draft = null;
    typed = [];
    const restored = under ?? view;
    under = null;
@@ -57,6 +111,9 @@ export function createViewMode(initial = VIEW_CONVERSATION) {
   submit() {
    const text = typed.join("");
    const restored = under ?? view;
+   // pi leaves history browsing on submit (`exitHistoryBrowsing()`), so the NEXT line types fresh.
+   browse = -1;
+   draft = null;
    typed = [];
    under = null;
    open = false;

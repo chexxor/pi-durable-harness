@@ -30,6 +30,7 @@ import { piEventsOf, queueUpdate } from "./pievents.mjs";
 import { expandInput } from "./promptplane.mjs";
 import { makeEnv } from "./executionenv.mjs";
 import { readFeed } from "./eventfeed.mjs";
+import { fauxPlaneRefusal } from "./providers.mjs";
 
 // pi's stdin commands, spelled as rpc-commands.md spells them, in the doc's own section order.
 const PI_COMMANDS = [
@@ -400,9 +401,21 @@ export async function handle(parts, msg, emit = null) {
 	 case "set_model": {
 	// pi's provider+modelId becomes pi-durable's ModelRef; configure() writes pi.agent, so no model
 	// registry is rebuilt here.
+	// THE GATE, and why it is here rather than at the dock: MEASURED at this pin, configuring a ModelRef
+	// pi's own Models plane does not know leaves the NEXT prompt with NO answer at all and nothing painted
+	// (the run settles `idle` silently - seen driving the dock with the pty helper), so a ref that is not
+	// in pi's plane must be refused BEFORE configure() writes it. The gate reads the same `parts.models`
+	// collection Harness.open drives - the one `get_available_models` lists below and the one src/tui/piscreen.mjs's
+	// piModelOf reads the context window from - so the candidate list a user picks from and the gate cannot
+	// disagree. `--faux` names pi-ai's faux plane as this run's answer (src/cli-intent.mjs' ONE rule
+	// `realModel = !opened.faux`), so switching a faux run onto pi's real providers is refused the same way:
+	// an offline run that quietly reached an endpoint would make the offline proof a lie.
 	 const provider = msg.provider ?? parts.intent?.provider ?? "faux";
 	 const modelId = msg.modelId;
 	 if (!modelId) return { command, success: false, error: "set_model needs provider and modelId" };
+	 const known = parts.models?.getModel?.(provider, modelId) ?? null;
+	 if (!known) return { command, success: false, error: `set_model must name a model pi's model plane knows: ${provider}/${modelId} is not one of pi-durable's get_available_models` };
+	 if (parts.intent?.faux && provider !== "faux") return { command, success: false, error: `set_model: ${fauxPlaneRefusal(provider, modelId)}` };
 	 await conversation.configure({ model: { provider, modelId } }, context);
 	 return { command, success: true, data: { provider, id: modelId } };
 	}

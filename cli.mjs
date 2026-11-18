@@ -19,7 +19,7 @@ import { claimWriter, releaseWriter, readOwner } from "./src/ownership.mjs";
 import { serveOwner, request } from "./src/attach.mjs";
 import { handle, commandNames } from "./src/rpc.mjs";
 import { scriptTurn, transcript } from "./src/core.mjs";
-import { harnessInvocation, intent, finalAnswerText, rpcLine, settleInvocation, chooseSurface, expandRunInput } from "./src/cli-intent.mjs";
+import { harnessInvocation, intent, finalAnswerText, rpcLine, settleInvocation, chooseSurface, expandRunInput, openAnswerRefusal } from "./src/cli-intent.mjs";
 // pi's OWN command-line option table, read off pi's pinned release (src/piflags.mjs): cli.mjs answers
 // each of pi's spellings explicitly, and quotes pi's own help words when refusing one it cannot take.
 import { piCliFlagOf, piCliFlagText } from "./src/piflags.mjs";
@@ -34,6 +34,10 @@ import { piEventsOf, sessionHeader } from "./src/pievents.mjs";
 // for a store another process owns is demo/tui-interactive.mjs.
 import { openWriterView, writerSubmit } from "./src/tui/writer.mjs";
 import { createUiDriver } from "./src/tui/driver.mjs";
+// pi's prompt-history rules live in src/tui/viewmode.mjs (pi's own machine, spelled for this surface); the
+// text of a committed pi-durable entry is read here so the row surface can seed that machine with the prompts
+// the store already has.
+import { entryText } from "./src/tui/piscreen.mjs";
 import { applyThemeToRows } from "./src/tui/theme.mjs";
 import { renderFrame, rowComponent, INPUT_MARK } from "./src/tui/frame.mjs";
 import { piDockLoop } from "./src/tui/pidockloop.mjs";
@@ -330,12 +334,10 @@ async function main() {
   const interactive = tui && (process.stdin.isTTY === true || args.keystrokeInput === true);
   const argsFor = { ...args, ...(tui ? { tui: true } : {}) };
 
-  // Claim before opening: the process that opens the store is the process that owns the mutation line.
-  const claim = args.noSession ? null : claimWriter(store);
-
-  // The ONE shared path: flags -> intent -> one harnessInvocation -> the surface below only prints.
-  // pi-durable's recovery is inside that path (resume() when the store already has a committed line),
-  // which is why print, json, rpc, `-c`/`-r`, and `--session <id>` cannot open differently.
+  // The flags come BEFORE the claim on purpose: the who-answers rule (src/cli-intent.mjs' openAnswerRefusal)
+  // has to refuse a run that cannot say honestly which plane answers it, and a refusal AFTER claimWriter
+  // would leave a lock claiming the store in a process that is about to exit - main's try/finally below
+  // only runs once the open itself can fail.
   const flags = {
     ...argsFor,
     cwd,
@@ -345,6 +347,15 @@ async function main() {
     // pi's --append-system-prompt extends the base instructions rather than replacing them.
     ...(args?.systemPrompt && args?.appendSystem?.length ? { systemPrompt: [...(args.systemPrompt ? [args.systemPrompt] : []), ...args.appendSystem].join("\n\n") } : {}),
   };
+  const whoAnswers = openAnswerRefusal(intent(flags, { cwd }));
+  if (whoAnswers) throw new Error(whoAnswers);
+
+  // Claim before opening: the process that opens the store is the process that owns the mutation line.
+  const claim = args.noSession ? null : claimWriter(store);
+
+  // The ONE shared path: flags -> intent -> one harnessInvocation -> the surface below only prints.
+  // pi-durable's recovery is inside that path (resume() when the store already has a committed line),
+  // which is why print, json, rpc, `-c`/`-r`, and `--session <id>` cannot open differently.
   const parts = await harnessInvocation(flags, {
     extraExtensions: [],
     // pi's explicit resource paths (--extension/-e, --skill, --prompt-template <path>): forwarded
@@ -598,18 +609,45 @@ async function piScreenRun(parts, args, { shouldStop = null } = {}) {
   // keystroke quits (ESC/ctrl+d/ctrl+c) but a signal is not a keystroke, so the session's signal handler
   // (already installed in main) says when it was set, and this loop leaves so main's finally block
   // settles, closes the Harness and releases the claim - the same ordinary cleanup a quit runs.
-  const tally = await piDockLoop({ parts, ui, size, context: parts.context, reader: null, shouldStop });
+  // The offline plane is armed PER ADMISSION on this path, not once for the run: pi-ai's faux provider
+  // answers from a queue, and a TUI session submits as many prompts as the user types, so each admission
+  // queues its own scripted reply. This is the SAME rule the print path uses (cli.mjs arms
+  // `scriptTurn(parts.faux, [parts.intent.faux])` before submitting): only a run that spelled `--faux` is
+  // answered by faux, and a run that asked for a real model is answered by that model - it fails at pi-ai's
+  // auth layer rather than quietly from this script, which is why the answer here cannot pretend an endpoint
+  // spoke. `submit` is piDockLoop's own hook, so `writerSubmit` stays the ONE mutation line.
+  const submit = parts.intent.faux ? async (text, ctx) => {
+    scriptTurn(parts.faux, [parts.intent.faux]);
+    return await writerSubmit(parts, text, { context: ctx });
+  } : null;
+  const tally = await piDockLoop({ parts, ui, size, context: parts.context, reader: null, shouldStop, submit });
   ui.clear();
   ui.requestRender();
   ui.stop();
   return tally;
 }
 
+/** How many previous committed prompts the ROW surface seeds pi's history machine with - the same seed the
+ * pi-style screen uses (src/tui/pidockloop.mjs' HISTORY_SEED), handed over oldest first because pi's own
+ * `addToHistory` unshifts and puts the NEWEST entry at index 0, which is what pi's up-arrow reads first. */
+const ROW_HISTORY_SEED = 8;
+
 async function writerTui(parts, args, reader, { keystrokes = false } = {}) {
   const view = await openWriterView(parts, { conversationId: parts.conversation.id, context: parts.context });
   // Same size rule as piScreenRun: `0` means the terminal never said a size, so it falls back rather
   // than painting a frame zero columns wide.
   const size = () => ({ columns: process.stdout.columns || args.width || 80, rows: process.stdout.rows || args.height || 24 });
+  // Up-arrow recalls the previous prompt on THIS surface too. pi serves that on its own `Editor` through the
+  // PUBLIC `Editor.addToHistory`; this row surface is Durian-Pi's own overlay, so pi's history rules are
+  // spelled in src/tui/viewmode.mjs (a capability matrix row records that difference) and are seeded here
+  // from pi-durable's committed `pi.user` entries - pi-durable's entry page is newest-first, so pi's NEWEST
+  // prompts are the page's first user rows, reversed into pi's oldest-first seeding order.
+  const seededHistory = (await transcript(parts.conversation, parts.context, 200))
+    .filter((entry) => entry?.kind === "pi.user")
+    .map((entry) => entryText(entry))
+    .filter((text) => text)
+    .slice(0, ROW_HISTORY_SEED)
+    .reverse();
   // The wiring order is pi's own, read from the pinned dist: dist/cli/startup-ui.js builds
   // `new TuiMainScreen(new ProcessTerminal(), ..., getAgentDir())` and the screens answer `clear()`,
   // `addChild`, `invalidate()`, `requestRender()`, `stop()`. No escape sequence and no alt-screen
@@ -620,7 +658,15 @@ async function writerTui(parts, args, reader, { keystrokes = false } = {}) {
   let themedReport = null;
   const paintFrame = async () => {
     const at = size();
-    const frame = await view.paint({ width: at.columns, height: at.rows });
+    // `overlay: driver.view` is what makes a `--tui` user able to SEE the line they are typing: the row
+    // surface's typed draft is composited over one frame row (frame.mjs, through pi-tui's own
+    // `compositeTuiLine`) BEFORE pi's palette is applied, so the accent pick still colours it. Without
+    // it the frame is pi-durable's transcript only and a raw-mode terminal echoes nothing, so the user
+    // types blind (measured: the mark count in a painted frame used to be 0).
+    // `theme: piThemeOf(parts)` colours JUST the draft with pi's palette before compositing, so the
+    // typed line carries pi's `accent` (see frame.mjs' withInputOverlay for why the colour goes on
+    // before compositing); the frame-wide theme pass below leaves that already-coloured row alone.
+    const frame = await view.paint({ width: at.columns, height: at.rows, overlay: driver.view, overlayAt: 1, theme: piThemeOf(parts) });
     screen.clear();
     // pi's palette on the rows this TUI draws: docs/themes.md says a theme "control[s] the colors Pi uses
     // in interactive mode", pi's settings name the selected theme, and pi's own loader discovered its record
@@ -641,12 +687,17 @@ async function writerTui(parts, args, reader, { keystrokes = false } = {}) {
     // quitOnBareQ is off for a real terminal: a chat line has to be able to START with the letter q,
     // so ESC and Ctrl+C are the quits there and `q`/`quit` quit only as a whole submitted line. The
     // scripted (piped) surface keeps Durian-Pi's headless rule, which is what demo/tui.test.mjs and
-      // demo/cli.test.mjs assert.
+      // demo/cli.test.mjs assert. Same split for the bare `r` refresh key: on a real terminal only pi's
+      // own Ctrl+R refreshes, so a prompt may start with `r`.
     quitOnBareQ: !keystrokes,
+    refreshOnBareR: !keystrokes,
     // The driver's onInput is synchronous, so the line is queued and awaited in the loop below:
     // a submission is durable work and only the loop can await it in order.
     onInput: (line) => { typed.push(line); },
     onExit: () => {},
+    // pi's history machine, seeded (see above): pi's up-arrow then recalls a committed prompt instead of
+    // typing an escape sequence into the line.
+    history: seededHistory,
   });
   // A submitted line of `q`/`quit`/`exit` is the user asking to leave: it is NOT sent to the agent, and
   // the driver's own quit path is taken, so the lock is released and the Harness closed the same way ESC
@@ -680,6 +731,13 @@ async function writerTui(parts, args, reader, { keystrokes = false } = {}) {
         console.error(`refused: ${expandedLine.expansion.refused}`);
         continue;
       }
+      // The offline plane is armed PER ADMISSION on this path too - the SAME rule the print path (cli.mjs:
+      // `scriptTurn(parts.faux, [parts.intent.faux])`) and the pi-style screen (src/tui/pidockloop.mjs' caller
+      // in piScreenRun) use: pi-ai's faux provider answers from a queue, and a session submits as many
+      // prompts as the user types, so each admission queues its own scripted reply. A run that spelled no
+      // `--faux` arms nothing and is answered by the real model (or fails at pi-ai's auth layer), so the
+      // answer here never pretends an endpoint spoke.
+      if (parts.intent.faux) scriptTurn(parts.faux, [parts.intent.faux]);
       const ack = await writerSubmit(parts, expandedLine.text, { context: parts.context });
       // The acknowledgement goes to stderr so a scripted session reading stdout records stays parseable.
       console.error(`submitted: requestId=${ack.requestId} submissionId=${ack.submissionId} status=${ack.status}`);

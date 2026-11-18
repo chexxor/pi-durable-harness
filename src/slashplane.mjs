@@ -7,6 +7,13 @@
 //   pi's editor submit handler `setupEditorSubmitHandler` (dist/modes/interactive/interactive-mode.js)
 //   pi's built-in extension commands `pi.registerCommand(name, { description })` (dist/extensions/{llama,mcp}/index.js)
 //   pi-durable's ONE command handler `handle(parts, msg, emit)` (./rpc.mjs, the handler RPC mode and the attach socket call)
+//   pi-tui's exported `fuzzyFilter` (dist/index.d.ts:21, the ranker pi's own autocomplete recipe calls)
+//   pi's autocomplete recipe `createBaseAutocompleteProvider` (dist/modes/interactive/interactive-mode.js:500-559),
+//     its private helpers `getAutocompleteSourceTag`/`prefixAutocompleteDescription` on the same class (lines 441/461),
+//     and pi's model-search text `getModelSearchText` (dist/modes/interactive/model-search.js, reached through pi's own
+//     package entry by a dist file URL - the package's `exports` map is {".", "./rpc-entry"}, so there is no subpath import)
+//   pi's `enableSkillCommands` setting (docs/settings.md:160 "Register skills as `/skill:name` commands", read through
+//     src/settings.mjs' ONE SettingsManager resolver rather than a second parse of pi's file)
 // pi's verbs DROPPED from pi's own interactive layer, on purpose and named rather than silently: pi's
 // `InteractiveMode` (this harness does not compose it), pi's easter-egg/debug verbs `/debug`, `/arminsayshi`,
 // `/dementedelves` (absent from BUILTIN_SLASH_COMMANDS and from pi's docs, so left as pi's fallthrough), and
@@ -54,6 +61,8 @@
 // (`/debug`, `/arminsayshi`, `/dementedelves`) are NOT in BUILTIN_SLASH_COMMANDS and not in pi's docs, so
 // this file leaves them as pi's fallthrough (normal submission) rather than honouring an undocumented
 // verb.
+import { InteractiveMode, SettingsManager, getAgentDir } from "@earendil-works/pi-coding-agent";
+import { fuzzyFilter } from "@earendil-works/pi-tui";
 import { readFileSync, readdirSync } from "node:fs";
 import { handle } from "./rpc.mjs";
 import { expandRunInput } from "./cli-intent.mjs";
@@ -143,6 +152,55 @@ export function piBuiltinExtensionCommands() {
  return out;
 }
 
+/** pi's OWN answer to "what does this command's dropdown row say?", read off the private helpers of the
+ * class pi composes rather than retyped: `prefixAutocompleteDescription` (dist/modes/interactive/
+ * interactive-mode.js:461) prefixes pi's `[tag]` source marker, and the tag comes from `getAutocompleteSourceTag`
+ * (same class, line 441). Neither is on the package's exports map at this pin, but both are reachable as
+ * PROTOTYPES of the class the package DOES export (`InteractiveMode`, measured at this pin), and both are
+ * PURE: `getAutocompleteSourceTag` reads its one argument, and `prefixAutocompleteDescription` reaches the
+ * tag through `this.`, so `this` is hand-carried as a one-method object instead of composing pi's instance
+ * (which this harness refuses to do, per the capability matrix). A pin that stops shipping either helper
+ * THROWS, which is what keeps the wording pi's rather than a paraphrase typed here. */
+function piAutocompleteDescription(description, sourceInfo) {
+ const tag = InteractiveMode.prototype?.getAutocompleteSourceTag;
+ const prefix = InteractiveMode.prototype?.prefixAutocompleteDescription;
+ if (typeof prefix !== "function" || typeof tag !== "function") {
+  throw new Error(`pi's autocomplete description helpers are not on ${InteractiveMode?.prototype} at this pin - a paraphrased source prefix would be a different product`);
+ }
+ return prefix.call({ getAutocompleteSourceTag: tag }, description, sourceInfo);
+}
+
+/** pi's OWN search text for a model ref (dist/modes/interactive/model-search.js), reached through pi's own
+ * package entry by a dist file URL - the package's `exports` map is {".", "./rpc-entry"} at this pin, so a
+ * subpath import fails, and copying the formula would reimplement pi's ranking rule. A pin that stops
+ * shipping the module THROWS here rather than letting autocomplete rank by a guess. */
+async function piModelSearchText() {
+ const url = new URL("./modes/interactive/model-search.js", import.meta.resolve("@earendil-works/pi-coding-agent"));
+ const module = await import(url.toString());
+ if (typeof module?.getModelSearchText !== "function") throw new Error(`pi's model search text is not in ${url} at this pin - a guessed search text would rank pi's candidates by a different rule`);
+ return module.getModelSearchText;
+}
+
+/** pi's `enableSkillCommands` switch (docs/settings.md: "Register skills as `/skill:name` commands", default
+ * true), asked of pi's OWN SettingsManager rather than defaulted from pi's docs table here: pi's
+ * `createBaseAutocompleteProvider` gates the very same list on `this.settingsManager.getEnableSkillCommands()`,
+ * so a skill row this harness showed or hid by its own guess would not be pi's switch. src/settings.mjs owns
+ * pi's POLICY keys (they feed pi-durable's HarnessSettings); this asks pi's switch for one DISPLAY key, in
+ * pi's own getter, for the same cwd, and nothing else. A run whose settings file pi's manager cannot read
+ * throws, exactly as pi's own session would. */
+function piSkillCommandsEnabled(cwd) {
+ return SettingsManager.create(cwd, getAgentDir()).getEnableSkillCommands();
+}
+
+/** pi's `autocompleteMaxVisible` setting (docs/settings.md: "Visible autocomplete entries, from 3 to 20",
+ * default 5), asked of pi's OWN SettingsManager for the run cwd rather than defaulted here: pi's `InteractiveMode`
+ * hands the very same getter to pi's Editor (`getAutocompleteMaxVisible()` at interactive-mode.js:415/1690), and
+ * pi's Editor clamps it to 3..20 (dist/components/editor.js). A harness that picked its own visible count would
+ * hide pi's candidates on a wide terminal or overflow a narrow one. */
+export function piAutocompleteMaxVisible(cwd) {
+ return SettingsManager.create(cwd, getAgentDir()).getAutocompleteMaxVisible();
+}
+
 /** pi's own parse of a typed draft, in pi's own rules: trim, `/name` head, an EXACT or `/name <args>`
  * match against pi's builtin table (so an unknown `/foo` is NOT a command and pi submits it), and pi's
  * `!cmd` / `!!cmd` bash rule (an empty command falls through, as pi's own `if (command)` guard shows).
@@ -193,7 +251,11 @@ function renderResponse(command, response, keys = []) {
  * `needs` says which argument pi's own command needs before it can run here. */
 const PI_SLASH_VERBS = [
  { name: "new", verbs: [{ type: "new_session" }], keys: ["conversationId", "parentSession"] },
- { name: "model", verbs: (args) => args.includes("/") ? [{ type: "set_model", provider: args.slice(0, args.indexOf("/")), modelId: args.slice(args.indexOf("/") + 1) }] : [{ type: "set_model", modelId: args }], needs: "an argument", keys: ["provider", "id"] },
+ // `/model` with an argument sets the conversation's own ModelRef; `/model` ALONE answers with
+ // pi-durable's OWN `get_available_models` verb (pi's answer to "which models are there") rather than
+ // refusing, so the candidate list a reader sees is pi's model plane's list and not a list typed here.
+ // `bareList`/`bareKeys` are pi-durable's own field names in that answer record.
+ { name: "model", verbs: (args) => args.includes("/") ? [{ type: "set_model", provider: args.slice(0, args.indexOf("/")), modelId: args.slice(args.indexOf("/") + 1) }] : [{ type: "set_model", modelId: args }], bare: { type: "get_available_models" }, bareList: "models", bareKeys: ["provider", "id"], keys: ["provider", "id"] },
  { name: "thinking", verbs: (args) => [{ type: "set_thinking_level", level: args }], needs: "an argument", keys: ["level"] },
  { name: "compact", verbs: (args) => [{ type: "compact", customInstructions: args || null }], keys: ["taskId", "settled"] },
  { name: "session", verbs: [{ type: "get_session_stats" }, { type: "get_state" }], keys: ["sessionFile", "sessionId", "userMessages", "assistantMessages", "toolCalls", "toolResults", "totalMessages", "tokens", "cost", "model", "thinkingLevel", "messageCount"] },
@@ -218,9 +280,12 @@ const PI_SLASH_SELECTOR_REFUSALS = [
  * Decide one typed draft, and run it through pi-durable's command plane when this harness can.
  *
  * `{ handled, lines, settlements, quit }`:
- *   - `fallthrough` - pi's own "Normal message submission": the caller submits the draft exactly as
- *     before, which is what keeps pi's prompt-template and `/skill:name` expansion working (src/promptplane
- *     mjs expands at the seam) and what pi does for a name it does not list;
+ *   - `fallthrough` - pi's own "Normal message submission": the caller submits the draft through pi-durable's
+ *     ONE admission, and on the leading-`/` branch it submits `expanded`, pi's OWN expansion of a prompt
+ *     template and a skill command (docs/prompt-templates.md: "Pi expands the template before the resulting
+ *     text enters the agent", and dist/core/agent-session.js does the same two calls: `_expandSkillCommand`
+ *     then `expandPromptTemplate`); `expansion` names which of pi's kinds that was (`template`, `skill`,
+ *     `passthrough`), and what pi does for a name it does not list is still the draft itself;
  *   - `ran` - the verbs above were answered by `handle()`, and any input `handle()` queued (pi's bash verb
  *     queues its output as a follow-up input) is pushed onto `parts.settlements`, the same list the
  *     caller's `settleInvocation` waits on;
@@ -283,7 +348,9 @@ export async function dispatchLine(text, parts, { context = parts.context, repor
   if (expansion?.expansion?.refused) {
    return { handled: "refused", name: parsed.name, lines: [`refused: ${expansion.expansion.refused}`], settlements: [] };
   }
-  return { handled: "fallthrough", lines: [], settlements: [] };
+  // pi does NOT submit what the user typed when that leading `/` names a prompt template or a skill: dist/core/agent-session.js expands BOTH before the text enters the agent (`expandedText = this._expandSkillCommand(...); expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates])`, then `prompt: expandedText`). THE BUG THIS FIXED: the expansion was computed here only to look for a refusal and the expanded text was DISCARDED, so a `/review focus` draft reached the agent as the literal `/review focus` - pi answers the expanded template, not the name.
+  // The raw draft still goes to pi's history (pi calls `this.editor.addToHistory?.(text)` with the TYPED text before `session.prompt(text)` expands it, interactive-mode.js:2827/2839), which is why `expanded` is handed to the admission and not to the history machine.
+  return { handled: "fallthrough", lines: [], settlements: [], expanded: expansion.text, expansion: expansion.expansion };
  }
 
  const name = parsed.name;
@@ -329,6 +396,27 @@ export async function dispatchLine(text, parts, { context = parts.context, repor
    handled: "refused",
    name,
    lines: [`refused: /${name} - ${entry.description}; pi runs this built-in command inside its own InteractiveMode, which this harness does not compose - the capability matrix names it`],
+   settlements: [],
+  };
+ }
+
+ if (verbs.bare && !parsed.args) {
+  // pi opens its OWN selector UI for the value here (`ModelSelectorComponent`, named as uncomposed in
+  // the capability matrix); what this harness CAN do is answer the same question pi's selector asks
+  // with pi-durable's existing model-listing verb, in pi-durable's own field names, and print pi's own
+  // `argumentHint` for how to hand one back. Nothing here guesses a model or spells a candidate.
+  const response = await handle(parts, verbs.bare, null);
+  settle(response);
+  const listed = response?.data?.[verbs.bareList] ?? [];
+  return {
+   handled: "ran",
+   name,
+   kind: "command",
+   lines: [
+    ...renderResponse(verbs.bare.type, response, [verbs.bareList]),
+    ...listed.map((model) => renderResponse(name, { success: true, data: model }, verbs.bareKeys)).flat(),
+    ...(entry?.argumentHint ? [`${name}: /${name} ${entry.argumentHint}`] : []),
+   ],
    settlements: [],
   };
  }
@@ -396,4 +484,63 @@ export async function piCommandMenu(parts) {
   lines.push({ name: `/${row.name}`, description: row.description, state: row.source === "extension" ? "refused by name: pi dispatches package commands inside pi's CLI" : "expanded at the input seam (pi-durable's promptplane)" });
  }
  return { builtins, extension, lines };
+}
+
+/** pi's OWN command list for pi-tui's `CombinedAutocompleteProvider`, built the way pi's `createBaseAutocompleteProvider`
+ * (dist/modes/interactive/interactive-mode.js:500-559) builds it, from the data THIS harness already has:
+ *   - pi's builtin table above, mapped to pi's SlashCommand shape exactly as pi maps it;
+ *   - pi's `model` and `thinking` argument rules, attached through pi's exported `fuzzyFilter` over pi's own
+ *     search text and pi-durable's OWN candidate verbs (`get_available_models`, `get_available_thinking_levels`),
+ *     in pi's item shape `{ value: "provider/id", label: id, description: provider }`;
+ *   - pi's discovered prompt templates, description prefixed by pi's OWN `[tag]` source marker helper;
+ *   - pi's package extension commands, minus the builtin names pi removes, each carrying pi-durable's listing
+ *     reason (this harness refuses to RUN them, and the row says so in the same words `get_commands` prints);
+ *   - pi's `skill:${name}` rows, gated on pi's OWN `enableSkillCommands` switch through pi's SettingsManager getter.
+ * What pi offers and this harness does NOT: pi's `fdPath` file-path completion is handed `null` by piDockOf(),
+ * so pi's provider returns NO file items (measured: `getSuggestions(["@x"],0,2)` is null with fdPath null),
+ * and pi's `login` argument rule has nothing to offer here because this harness writes no credentials.
+ * pi's `[tag]` helper and pi's model search text THROW rather than paraphrase, so a pin that stops shipping
+ * either is a loud failure rather than a silently different dropdown. */
+export async function piAutocompleteCommands(parts, { cwd = parts?.intent?.cwd ?? parts?.cwd ?? process.cwd() } = {}) {
+ const slashCommands = piBuiltinSlashCommands().map((entry) => ({ ...entry }));
+ const searchText = await piModelSearchText();
+
+ const modelCommand = slashCommands.find((command) => command.name === "model");
+ if (modelCommand) {
+  modelCommand.getArgumentCompletions = async (prefix) => {
+   const models = parts?.models?.getAllModels?.() ?? [];
+   if (!models.length) return null;
+   const items = models.map((model) => ({ id: model.id, provider: model.provider, name: model.name, label: `${model.provider}/${model.id}` }));
+   const filtered = fuzzyFilter(items, prefix, searchText);
+   if (!filtered.length) return null;
+   return filtered.map((item) => ({ value: item.label, label: item.id, description: item.provider }));
+  };
+ }
+
+ const thinkingCommand = slashCommands.find((command) => command.name === "thinking");
+ if (thinkingCommand) {
+  thinkingCommand.getArgumentCompletions = async (prefix) => {
+   const response = await handle(parts, { type: "get_available_thinking_levels" }, null);
+   const levels = response?.data?.levels ?? [];
+   if (!levels.length) return null;
+   return fuzzyFilter(levels, prefix, (level) => level).map((level) => ({ value: level, label: level }));
+  };
+ }
+
+ const templateCommands = (parts?.resources?.promptTemplates ?? []).map((template) => ({
+  name: template.name,
+  description: piAutocompleteDescription(template.description, template.sourceInfo),
+  ...(template.argumentHint ? { argumentHint: template.argumentHint } : {}),
+ }));
+
+ const builtinNames = new Set(slashCommands.map((command) => command.name));
+ const extensionCommands = (parts?.resources?.commands ?? [])
+  .filter((row) => !builtinNames.has(row.name))
+  .map((row) => ({ name: row.name, description: row.reason }));
+
+ const skillCommands = piSkillCommandsEnabled(cwd)
+  ? (parts?.resources?.skills ?? []).map((skill) => ({ name: `skill:${skill.name}`, description: piAutocompleteDescription(skill.description, skill.sourceInfo) }))
+  : [];
+
+ return [...slashCommands, ...templateCommands, ...extensionCommands, ...skillCommands];
 }

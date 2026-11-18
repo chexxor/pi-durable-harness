@@ -328,9 +328,15 @@ async function main() {
  // line of `quit` on its own ends the session without ever reaching the agent.
  const keystrokeRun = await runScript(CLI, ["--store", store, "--cwd", cwd, "--faux", fauxReply, "--tui", "--keystroke-input"], { stdin: "quiet re-run\rquit\r" });
  const acks = keystrokeRun.stderr.split("\n").filter((line) => line.includes("submitted: requestId="));
- record(keystrokeRun.exit === 0 && acks.length === 1 && acks[0].includes("quiet re-run"),
-   "the keystroke stream keeps q and r as letters, submits the line whole, and a bare `quit` line ends the session",
-   `acks=${JSON.stringify(acks)} exit=${keystrokeRun.exit}`);
+ const ackIds = acks.map((line) => (line.match(/requestId=(\S+)/) ?? ["", ""])[1]);
+ // WHY THE ACK NO LONGER CARRIES THE WORDS: pi-durable's `requestId` is a SUBMISSION identity, and pi's rule
+ // is that every ENTER finishes a draft and every finished draft is a NEW prompt, so the TUI's fallback id names
+ // the submission EVENT (`tui:<pid>:<n>`, src/tui/writer.mjs) rather than a fingerprint of the text. "the line
+ // went in whole" is therefore proven by the committed pi.user row below, and this check keeps its own two halves:
+ // ONE admission for the two-line feed, and pi-durable's own identity words in that ack.
+ record(keystrokeRun.exit === 0 && acks.length === 1 && new Set(ackIds).size === 1 && ackIds[0] !== "",
+   "the keystroke stream keeps q and r as letters and admits EXACTLY ONE line for the two-line feed (the bare `quit` line ends the session and admits nothing), and that ack names pi-durable's own submission identity rather than the words typed",
+   `ack=${JSON.stringify(acks)} requestId=${JSON.stringify(ackIds)} exit=${keystrokeRun.exit}`);
  const keystrokeProof = await runScript(CLI, ["--store", store, "--cwd", cwd, "-c", "--mode", "json"]);
  const keystrokeRecords = keystrokeProof.stdout.split("\n").filter((l) => l.trim()).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
  const keystrokeUser = keystrokeRecords.filter((r) => r.type === "message_end" && r.message?.role === "user" && JSON.stringify(r.message).includes("quiet re-run"));

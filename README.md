@@ -225,19 +225,20 @@ checks) measures every one of those decisions at the dock, and the capability ma
 
 The pi package ecosystem is reused through pi's own library exports, and every capability pi has that
 pi-durable does not is **named** rather than quietly dropped: [docs/package-support.md](docs/package-support.md)
-is generated from `src/packages/matrix.mjs` by `scripts/render-matrix.mjs` — 125 rows
-(17 native / 47 shimmed / 61 unsupported), evidence per row, plus the packages actually installed on
+is generated from `src/packages/matrix.mjs` by `scripts/render-matrix.mjs` — 138 rows
+(21 native / 51 shimmed / 66 unsupported), evidence per row, plus the packages actually installed on
 this machine and what loaded from them. `src/packages/loader.mjs` uses pi's `DefaultResourceLoader`,
 `discoverAndLoadExtensions` and `loadProjectContextFiles`; `src/packages/adapter.mjs` maps pi's
 `registerTool`, `tool_call`/`tool_result`/provider/compaction handlers, skills, prompts, themes and
 context files onto pi-durable's `defineExtension`/`defineTool`/`hook`/`section`/`wrapTool` — a pi extension that registers a tool name the harness already offers becomes pi-durable's `wraps` slot (pi's `wrapRegisteredTool` case), so pi's argument repair and log line run AROUND pi-durable's own tool rather than beside it: `demo/packages.test.mjs` proves the wrapped `bash` ran exactly once (a marker file gained one line) and that pi's own execute never replaced the worker.
 `demo/packages.test.mjs` (51 checks) proves the shim runs end to end on a fixture package and on the
 four real pi packages installed here. `scripts/audit-pi-docs.mjs` re-reads pi's OWN docs inside the
-pinned package — all thirteen that enumerate a surface this harness claims: packages.md, extensions.md,
-rpc.md AND rpc-commands.md (pi's 34 RPC verbs), json.md (pi's event records), message-types.md (pi-ai's
+pinned package — all fifteen that enumerate a surface this harness claims: packages.md, extensions.md,
+rpc.md AND rpc-commands.md (pi's RPC verb list — 36 caps at this pin, 23 verbs answered on pi-durable planes
+and 9 refused BY NAME), json.md (pi's event records), message-types.md (pi-ai's
 message types), tui.md (pi-tui's components), rpc-extension-ui.md (pi's extension dialogs), session-format.md
 (pi's session-file entry types), cli.md, sessions.md, compaction.md and slash-commands.md (pi's slash-command
-table) — harvests the 333 capabilities they enumerate, and fails if any is named by neither a matrix row's `names` array nor by a call in harness code
+table), keybindings.md (pi's named keybinding actions) and configuration.md (pi's configuration paths) — harvests the 443 capabilities they enumerate, and fails if any is named by neither a matrix row's `names` array nor by a call in harness code
 with its comments stripped: `src/packages/matrix.mjs` is kept OUT of that code corpus, so the matrix cannot
 vouch for itself, and a documented flag counts as taken only when a file that actually parses `argv` spells
 that literal. What that audit forces into the open is pi's whole extension surface (its `ExtensionContext`
@@ -256,6 +257,63 @@ are honoured). `src/piflags.mjs` derives that flag table from pi's pinned `dist/
 pi's `Options:` block or one of pi's core spellings vanishes, so a flag pi adds at a later pin becomes a
 refusal by name rather than a swallowed message) — every one named as native,
 shimmed or unsupported with a reason a reader can check against the tree, none silently dropped.
+
+## Pi parity — what is honoured, and what is refused BY NAME
+
+[docs/parity-sweep.md](docs/parity-sweep.md) is the committed summary of the divergence sweep against pi's
+own pinned docs; the full per-section walk with evidence lines sits in `.ai-work/pi-tui-parity-goal/pi-parity-sweep.md`
+(gitignored state, same numbers). Seven docs carry the surfaces the reported symptoms live on — `tui.md`,
+`keybindings.md`, `slash-commands.md`, `cli.md`, `sessions.md`, `compaction.md`, `configuration.md` — and their
+**228 harvested caps** are claimed by **43 of the 138 matrix rows**: 60 native, 45 shimmed, 112 refused BY NAME,
+11 covered by harness code only (a file that actually parses `argv` spells the flag, so no row need restate the parser).
+The sweep is measured, not remembered: `scripts/audit-pi-docs.mjs` re-reads pi's docs every run and FAILS on any cap
+neither a row's `names` nor harness code covers, so a capability pi gains at a later pin becomes a finding rather than
+a swallowed verb.
+
+Honoured — pi's OWN components, mounted rather than reimplemented:
+
+* the pi-style screen IS pi-tui's `TuiAltScreen` over pi's `ProcessTerminal`, with pi's `ScrollView`/`VStack`/`Spacer`
+  composition and pi's theme palette only — pi's fullscreen keybinding actions (all 14, `previousPrompt`, `search`,
+  `top`, `bottom`, …) are pi's, and pi's `CustomEditor` + `KeybindingsManager` + `TUI_KEYBINDINGS` are the input dock,
+  so pi's key TABLE decides what a keystroke means (47 `tui.*` ids bound, pi's own key words read off pi's pinned dist);
+* a typed prompt is answered and painted: the admission goes through pi-durable's ONE writer, and a run that names no
+  model resolves pi's `settings.json` default through pi's provider plane and REALLY calls it — pi-ai's faux plane is
+  armed ONLY under the explicit `--faux` flag, never as a fallback behind the user's back;
+* `/model` lists pi's candidates through `get_available_models` and `/model <ref>` switches the model THIS run answers
+  with (header `model <provider>/<id>` and footer repaint, proven by the NEXT answer); pi's `settings.json` default is
+  NOT rewritten without an explicit ask;
+* typing `/` at the dock gives pi's OWN autocomplete dropdown — pi's `CombinedAutocompleteProvider` + `fuzzyFilter`
+  installed through pi's PUBLIC `Editor.setAutocompleteProvider`, pi's slash-trigger rule in pi's `Editor.handleInput`,
+  pi's visible count from pi's `SettingsManager.getAutocompleteMaxVisible()` — fed with pi's own data (the builtin slash
+  table, discovered prompt templates, `skill:` rows, package extension commands, and the `model`/`thinking` argument
+  menus); pi's `(1/9)` counter and ENTER reaching pi's completion are measured in `demo/autocomplete.test.mjs`;
+* up-arrow recalls the last prompt typed, at BOTH surfaces: pi's `tui.editor.cursorUp` at the pi-style screen resubmits
+  it through pi's PUBLIC `Editor.addToHistory` — seeded from committed `pi.user` rows, because pi offers no history
+  constructor option at this pin — and `shimmed :: pi's prompt-history recall at the harness's OWN row overlay` covers
+  `--tui`/`--row-view`.
+
+Refused BY NAME — pi has them, pi-durable has no plane for them at this pin, and the refusal prints pi's own words:
+pi's selector dialogs and their keybindings (`/settings`, `/scoped-models`, `app.model.select`, `app.models.*`,
+`app.thinking.*`), pi's session picker and tree navigator (`app.session.*`, `app.tree.*`, `/resume`, `/name`, `/import`,
+`--fork`, `--name`, pi's session-file addressing via `--session-id`/`--session-dir` — pi-durable keeps ONE store per
+directory, so `--session-dir` is refused rather than guessed at a second store), pi's `/fork` (pi matches it EXACTLY
+only and opens its own message selector, so `/fork 2` is pi's ordinary message), pi's built-in extension commands
+`/llama` and `/mcp`, `/export` `/share` `/bug` `/trust` `/reload` `/hotkeys` `/changelog`, pi's credential and OAuth
+commands (`--api-key`, `--approve`/`-a`, `--no-approve`/`-na`, `--credentials`, pi's `--oauth-*`), pi's MCP plane,
+pi's `Image`/`Markdown`/`SelectList`/`SettingsList`/`Loader`/`CancellableLoader`/`MouseRegion` components, pi's
+`Input`/`Editor`/`Focusable` and the whole `ctx.ui` extension-UI subprotocol (`extension_ui_request`/`extension_ui_response`
+— an extension that calls it throws loudly rather than hanging on a dialog nothing renders), pi's `BranchSummaryEntry`
+branch summarization, pi's `<agent-dir>/keybindings.json`, `SYSTEM.md` and `APPEND_SYSTEM.md` paths, and pi's
+selection-copy keybinding (`ctrl+c` at the dock is pi's clear/exit key, never copy).
+
+How each of those claims is checked: one committed offline demo per fixed surface — FOUR of them (`autocomplete`, `recall`,
+`keybindings`, `pieditor`) drive a REAL pty through `scripts/ptydrive.mjs`, pi's own python3-stdlib pty helper, one
+keystroke per write, `demo/tty.test.mjs` allocates its own python3 pty inline for the row surface, and the rest
+(`piscreen`, `slash`, `modeldefault`) drive the same code paths in-process — asserting
+against pi-tui's painted bytes read back through pi's PUBLIC `Terminal` interface with pi's own
+`stripTerminalSequences`, not against this harness's notion of what it drew. `node scripts/suite.mjs` runs the lot
+offline (no keys, no network) and reports fail=0; the one proof that needs the network is marked as such in
+`.ai-work/` rather than blended into the offline suite.
 
 ## How the work was executed
 
@@ -279,9 +337,9 @@ from the tags.
 | `src/settings.mjs`, `src/providers.mjs`, `src/spend.mjs` | settings/policy resolution, model plane, money ledger |
 | `src/toolsurface.mjs`, `src/executionenv.mjs` | tool guardrails, custom tools, and the execution environment |
 | `src/packages/` | pi package discovery, pi's own loader, the extension shim, the capability matrix |
-| `demo/` | the offline demo suite (no keys, no network); `*-interactive`/`*-writer`/`*-reader` are fixtures |
-| `scripts/` | `suite.mjs` (demos + audits), `sync-pi.mjs`, `render-matrix.mjs`, the three audits |
-| `docs/` | capability matrix, attach semantics, provenance table |
+| `demo/` | the offline demo suite (no keys, no network); `*-interactive`/`*-writer`/`*-reader` are fixtures; `tty`/`autocomplete`/`recall`/`keybindings`/`pieditor`/`piscreen`/`slash`/`modeldefault` are the per-surface parity demos — `autocomplete`/`recall`/`keybindings`/`pieditor` drive a real pty through `scripts/ptydrive.mjs`, `tty` allocates its own python3 pty inline, the rest run in-process |
+| `scripts/` | `suite.mjs` (demos + audits), `sync-pi.mjs`, `render-matrix.mjs`, `ptydrive.mjs` (the committed pty driver every TUI proof runs through), the three audits |
+| `docs/` | capability matrix, the pi-parity sweep, attach semantics, provenance table, execution protocol |
 
 ## Provenance
 
