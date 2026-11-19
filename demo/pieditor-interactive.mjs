@@ -68,7 +68,9 @@ async function main() {
   context: BACKGROUND_CONTEXT,
   keystrokes: true,
   reader: null,
-  report: (line) => console.error(line),
+  // No `report:` here on purpose: pi's alt screen is open, so the harness's own status lines (`submitted:
+  // requestId=... submissionId=... status=...`, a `set_model:` answer, a refusal by name) go to pi's
+  // transcript region as their OWN wrapped rows, which is what keeps pi's bordered dock whole.
  });
  ui.clear();
  ui.requestRender();

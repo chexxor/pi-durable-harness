@@ -176,10 +176,11 @@ const FEEDS = [
  ["bottom", "1b5b313b3546", ["tui.altScreen.bottom"]],
  ["previousPrompt", "1b5b313b3541", ["tui.altScreen.previousPrompt"]],
 ];
-const drive = ["--timeout", "90", "--after", "3", "--gap", "0.9"];
-for (const keystroke of ["first prompt alpha", "\\r", "second prompt beta", "\\r", "third prompt gamma", "\\r"]) drive.push("--keystroke", keystroke);
+const TYPED = ["first prompt alpha", "\\r", "second prompt beta", "\\r", "third prompt gamma", "\\r"];
+const drive = ["--timeout", "90", "--after", "3", "--gap", "0.9", "--winsize", "70", "30"];
+for (const keystroke of TYPED) drive.push("--keystroke", keystroke);
 for (const [, hex] of FEEDS) drive.push("--feed-hex", hex);
-drive.push("--keystroke", "/quit\\r", "--", "node", CLI, "--store", STORE, "--cwd", CWD, "--width", "60", "--height", "12", "--faux", "probe");
+drive.push("--keystroke", "/quit\\r", "--", "node", CLI, "--store", STORE, "--cwd", CWD, "--width", "70", "--height", "30", "--faux", "probe");
 const segments = [];
 try {
  const out = execFileSync("node", [join(ROOT, "scripts", "ptydrive.mjs"), ...drive], { cwd: ROOT, encoding: "utf8", timeout: 150000 });
@@ -196,27 +197,51 @@ try {
 }
 record(segments.length >= 10,
  "the ONE terminal run answered a segment per keystroke, so a reader can tell WHICH byte produced WHICH paint",
- `segments=${segments.length} feeds=${FEEDS.length}`);
+ `segments=${segments.length} feeds=${FEEDS.length} labels=${segments.map((e) => e.label.split(" ")[0]).join(",")}`);
 const BORDER = "\u2503";
-// The helper labels a segment with the feed's OWN bytes (python's `%r`), so a reader can match a feed to a paint.
+// The helper labels a segment with the keystroke whose OWN paint it holds (`response to keystroke3 b'...'`),
+// so a reader matches a feed to the paint that feed produced, not to the write that closed the window.
 function feedRepr(hex) {
  const bytes = Buffer.from(hex, "hex").toString("latin1");
  return `b'${bytes.replace("\u001b", "\\x1b")}'`;
 }
+const TOP_ROW = "pi-durable session";
+const END_ROW = "third prompt gamma";
+// Which end of the document each feed's OWN response shows: pi's header row is at the DOCUMENT TOP, pi's
+// newest prompt row is at the CONTENT END. A feed whose response shows the header row but not the newest
+// prompt row left the view at the top; one whose response shows the newest prompt row left it at the end.
+// This is the honest shape at this pin: pi's `follow: "end"` rule is that the view sticks to the content end
+// WHILE it sits at that end, so a scroll feed that moves away from the end stays moved.
+const SHOWS = {
+ pageUp: "top",
+ top: "top",
+ bottom: "end",
+ previousPrompt: "end",
+};
 for (const [name, hex, ids] of FEEDS) {
  const segment = segments.find((entry) => entry.label.includes(feedRepr(hex)));
+ const top = segment?.rows.filter((row) => row.includes(TOP_ROW)).length ?? -1;
+ const end = segment?.rows.filter((row) => row.includes(END_ROW)).length ?? -1;
  const box = segment?.rows.filter((row) => row.includes(BORDER)).length ?? -1;
- const header = segment?.rows.filter((row) => row.includes("pi-durable session")).length ?? -1;
- record(segment && box === (name === "top" || name === "bottom" ? 1 : 0),
-  `pi's ${name} bytes ${name === "top" || name === "bottom" ? "paint pi's box border (the transcript view), and no other feed does" : "repaint the view WITHOUT pi's box border"}`,
-  `bytes=${hex} ids=${ids.join(",")} box=${box} header=${header} label=${segment?.label ?? "no segment"}`);
+ const want = SHOWS[name];
+ const atTop = want === "top" ? top >= 1 && end === 0 : top === 0 && end >= 1;
+ const where = want === "top" ? "DOCUMENT TOP (pi's header row on screen, pi's newest prompt row off it)" : "CONTENT END (pi's newest prompt row on screen, pi's header row off it)";
+ record(atTop,
+  `pi's ${name} feed answers pi's ${ids.join(",")} ids and its OWN response segment sits at the ${where}`,
+  `bytes=${hex} ids=${ids.join(",")} top=${top} end=${end} box=${box} label=${segment?.label ?? "no segment"}`);
 }
+const fresh = segments.find((entry) => entry.label.includes(`response to keystroke${TYPED.length} `));
+const freshTop = (fresh?.rows ?? []).filter((row) => row.includes(TOP_ROW)).length;
+const freshEnd = (fresh?.rows ?? []).filter((row) => row.includes(END_ROW)).length;
+record(freshEnd >= 1,
+ "pi's fresh view is AT THE CONTENT END (pi's newest prompt row is on screen in the segment answering pi's last ENTER), and pi's pageUp response segment leaves pi's newest prompt row off the screen instead",
+ `freshTop=${freshTop} freshEnd=${freshEnd} label=${fresh?.label ?? "no segment"}`);
 const feedSegments = FEEDS.map(([, hex]) => segments.find((entry) => entry.label.includes(feedRepr(hex))));
-const anyBox = feedSegments.filter((entry) => (entry?.rows ?? []).some((row) => row.includes(BORDER))).length;
-const headerSegments = segments.filter((entry) => entry.rows.some((row) => row.includes("pi-durable session"))).length;
-record(anyBox === 2 && headerSegments >= 1,
- "pi's box border paints in EXACTLY the two altScreen FEED segments (pi's top and pi's bottom), and pi's session header row is in the view",
- `boxSegments=${anyBox} headerSegments=${headerSegments} total=${segments.length}`);
+const topSegments = feedSegments.filter((entry) => (entry?.rows ?? []).some((row) => row.includes(TOP_ROW))).length;
+const endSegments = feedSegments.filter((entry) => (entry?.rows ?? []).some((row) => row.includes(END_ROW))).length;
+record(topSegments === 2 && endSegments === 2,
+ "EXACTLY pi's pageUp and pi's ctrl+home responses show pi's document-top header row, and EXACTLY pi's ctrl+end and pi's previousPrompt responses show pi's newest prompt row",
+ `topSegments=${topSegments} endSegments=${endSegments} total=${segments.length}`);
 
 // 5) the config plane: which of pi's own configuration files pi's OWN readers actually read for this run.
 const CFGROOT = mkdtempSync(join(tmpdir(), "dh-config-"));

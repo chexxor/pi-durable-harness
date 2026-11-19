@@ -620,7 +620,13 @@ async function piScreenRun(parts, args, { shouldStop = null } = {}) {
     scriptTurn(parts.faux, [parts.intent.faux]);
     return await writerSubmit(parts, text, { context: ctx });
   } : null;
-  const tally = await piDockLoop({ parts, ui, size, context: parts.context, reader: null, shouldStop, submit });
+  // `window: true` is spelled rather than left to the default: piScreenRun just opened pi's alt screen
+  // (`new TuiAltScreen(...)` above), so pi-durable's OWN status lines - the acknowledgement triple,
+  // a `set_model:` answer, a refusal BY NAME, the `expanded pi's ...` hint - are painted as their OWN
+  // wrapped rows in pi's transcript region instead of written raw to stderr, which is what keeps pi's
+  // bordered dock/draft rows whole (the user's second symptom). A surface with NO window open - print,
+  // RPC/JSON, or the row view - keeps its raw stderr writes unchanged.
+  const tally = await piDockLoop({ parts, ui, size, context: parts.context, reader: null, shouldStop, submit, window: true });
   ui.clear();
   ui.requestRender();
   ui.stop();

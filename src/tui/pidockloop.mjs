@@ -42,7 +42,7 @@ import { transcript } from "../core.mjs";
 import { createSyncState, openWatch, snapshotSync } from "./sync.mjs";
 import { writerSubmit } from "./writer.mjs";
 import { dispatchLine, piAutocompleteCommands, piAutocompleteMaxVisible } from "../slashplane.mjs";
-import { entryText, installPiTheme, piAddToHistory, piContextOf, piDockOf, piFooterOf, piGitBranchOf, piHeaderOf, piLiveRows, piMarkdownTheme, piModelOf, piScreen, piSessionEntriesOf, piStatusRows, piTranscriptDocument } from "./piscreen.mjs";
+import { entryText, installPiTheme, piAddToHistory, piContextOf, piDockOf, piFooterOf, piGitBranchOf, piHeaderOf, piLiveRows, piMarkdownTheme, piModelOf, piNoteRows, piScreen, piSessionEntriesOf, piStatusRows, piTranscriptDocument } from "./piscreen.mjs";
 
 /** How many previous committed prompts pi's Editor history starts with; pi's history is UNEXPORTED at this
  * pin (pi's `EditorOptions` has no history field), so the seed is pi-durable's committed user entries handed
@@ -141,6 +141,7 @@ export async function piDockLoop({
  keystrokes = false,
  submit = null,
  report = null,
+ window = true,
  history = null,
  limit = 200,
  watch = true,
@@ -150,7 +151,19 @@ export async function piDockLoop({
  shouldStop = null,
 }) {
  const submitDraft = submit ?? ((text, ctx) => writerSubmit(parts, text, { context: ctx }));
- const say = report ?? ((line) => process.stderr.write(`${line}\n`));
+ // WHERE pi-durable's OWN status lines go. While pi's alt screen is open (`window`, spelled by cli.mjs'
+ // piScreenRun below), a RAW stderr write is painted BY THE TERMINAL over pi's frame: the alt screen owns
+ // the terminal, and pi's hardware cursor is wherever pi last drew, so `submitted: requestId=...` used to
+ // tear across pi's bordered dock (the user's second symptom). While a window is open the line is instead
+ // carried to pi's transcript document as pi's OWN wrapped rows (`piNoteRows`: pi's `Text.render(width)`
+ // word-wraps at the render width), and only a caller with NO window open - the headless/print/RPC/JSON
+ // surfaces, or a demo asserting on the lines - writes raw stderr, byte-for-byte as before. A caller that
+ // wants its own channel still passes `report`, which is what the offline demos use to capture them.
+ const notes = [];
+ const say = report ?? ((line) => {
+  if (window) { notes.push(line); return; }
+  process.stderr.write(`${line}\n`);
+ });
  const cwd = parts?.intent?.cwd ?? parts?.cwd ?? null;
  const markdownTheme = piMarkdownTheme();
  const committed = async () => await transcript(parts.conversation, context, limit);
@@ -224,18 +237,37 @@ export async function piDockLoop({
  const currentAgent = async () => {
   try { return await parts.conversation.agent(context); } catch { return null; }
  };
- const paint = async () => {
-  const at = size();
-  const entries = await committed();
-  const agent = await currentAgent();
-  const live = liveState ? snapshotSync(liveState, { conversationId: parts.conversation.id }) : null;
-  const pendingTools = {};
-  const built = piTranscriptDocument({ entries, ui, cwd, markdownTheme, pendingTools, prepend: piRunHeader(parts, { agent }).header });
-  for (const component of piLiveRows({ live: live?.live, pendingTools, ui, cwd })) built.document.addChild(component);
-  const status = new Container();
-  for (const row of piStatusRows(live?.live)) status.addChild(row);
-  const screen = piScreen({ document: built.document, editor, status, footer: piRunFooter({ parts, entries, ui, context, agent }) });
-  ui.setLayoutRoot(screen.root);
+// pi builds its viewport ONCE per session (`createChatViewport` runs once in pi's own
+  // interactive-mode.js) and keeps pi's ScrollView, chatContainer, status container and footer container
+  // alive between frames, because pi's scroll position and pi's transient scrollbar live INSIDE pi's
+  // ScrollView (`currentScrollTop`, `followingEnd`, `transientScrollbarVisible`). So they are built here,
+  // outside `paint()`, and refilled IN PLACE below: a fresh ScrollView per paint restarts pi's scroll
+  // state (`followingEnd` starts true, `currentScrollTop` 0), which is what snapped a view pi's own
+  // `tui.altScreen.pageUp` had scrolled back to the content end on the very next frame.
+  const transcriptDocument = new Container();
+  const statusBox = new Container();
+  const footerBox = new Container();
+  const screen = piScreen({ document: transcriptDocument, editor, status: statusBox, footer: footerBox });
+  const paint = async () => {
+   const at = size();
+   const entries = await committed();
+   const agent = await currentAgent();
+   const live = liveState ? snapshotSync(liveState, { conversationId: parts.conversation.id }) : null;
+   const pendingTools = {};
+   const built = piTranscriptDocument({ entries, ui, cwd, markdownTheme, pendingTools, prepend: piRunHeader(parts, { agent }).header, existing: transcriptDocument });
+   for (const component of piLiveRows({ live: live?.live, pendingTools, ui, cwd })) built.document.addChild(component);
+   // pi-durable's own status lines take the LAST rows of pi's transcript region, in the order the loop
+   // said them, so the newest acknowledgement sits in the row just above pi's dock. They live in pi's
+   // chatContainer, so they page up and out of the way like the committed rows do, and pi's `follow:
+   // "end"` keeps the newest one in view while the view sits at the end.
+   for (const row of piNoteRows(notes)) built.document.addChild(row);
+   statusBox.clear();
+   for (const row of piStatusRows(live?.live)) statusBox.addChild(row);
+   footerBox.clear();
+   footerBox.addChild(piRunFooter({ parts, entries, ui, context, agent }));
+   // pi's OWN guard (`setLayoutRoot` returns when the root is the same component) makes a stable root
+   // cheap, so a repaint is pi's invalidate-and-request-render pair.
+   ui.setLayoutRoot(screen.root);
   ui.invalidate();
   ui.requestRender();
   // pi schedules frames on a throttled timer (tui.js `scheduleRender`, `MIN_RENDER_INTERVAL_MS`), so a
@@ -283,9 +315,24 @@ export async function piDockLoop({
    slash.push(decision);
    if (decision.handled !== "fallthrough") {
     for (const line of decision.lines) say(line);
-    // pi's OWN clear-the-draft rule (`clearEditor()` in interactive-mode.js: setText("") and nothing
-    // else), which is why a slash command is not an admission: nothing reaches submitDraft here.
-    editor.setText("");
+    // WHERE THE DRAFT GOES AFTER pi's DECISION. pi-tui's own `Editor.submitValue()` (dist/components/
+    // editor.js:1145) has ALREADY taken the draft out of pi's Editor (`this.state = { lines: [""], ... }`
+    // runs before `this.onSubmit(result)`), so the dock is empty at the moment this branch runs, and
+    // pi's PUBLIC `Editor.setText` (dist/components/editor.js:928) is the only way to hand a draft back.
+    // pi's own clear-the-draft rule (`clearEditor()` in interactive-mode.js: setText("") and nothing
+    // else) is what this branch follows for a command pi RAN (`ran`) or for `/quit` (`quit`: pi's own
+    // `/quit` handler at interactive-mode.js:2784 does `this.editor.setText("")` before shutdown).
+    // A command pi-durable REFUSED BY NAME is not a command pi ran, and pi's own rule for a command it
+    // could NOT run is to put the typed text back where the user can fix it or cancel it: pi does exactly
+    // that at interactive-mode.js:2799 (`this.showWarning("A bash command is already running. Press Esc to
+    // cancel it first."); this.editor.setText(text);`) and in pi's `showExtensionCustom` dialog, which
+    // saves the draft with `editor.getExpandedText?.() ?? editor.getText()` (:2414) and restores it with
+    // `this.editor.setText(savedText)` when the dialog closes (:2426 `restoreEditor`). So the typed
+    // command stays in pi's dock after the refusal - pi's Editor owns that draft, wraps it at the render
+    // width itself, and pi's Esc rule below (`editor.setText("")`) is what clears it. Nothing is admitted
+    // here either: the refusal never reaches `submitDraft`, which stays the only mutation a draft takes.
+    if (decision.handled === "refused") editor.setText(text);
+    else editor.setText("");
     // pi adds a `!cmd`/`!!cmd` draft to ITS history BEFORE it runs the command (interactive-mode.js:2802),
     // so up-arrow recalls a bash line the user ran. pi does NOT record the builtin slash commands it handles
     // in the editor - that is pi's own rule about which call sites exist, not a menu this file hides.
@@ -358,6 +405,7 @@ export async function piDockLoop({
   expansions: seenExpansions,
   clears: seenClears,
   caret,
+  notes: notes.slice(),
   acks,
   submitted: acks.length,
   cancelled: seenCancels.length,

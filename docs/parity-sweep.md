@@ -17,7 +17,7 @@ Status words, identical in the matrix, in `docs/package-support.md`, and here:
 
 * pi's pinned docs inside the installed package (`node_modules/@earendil-works/pi-coding-agent/docs/`) are the
   authority, not pi's marketing copy. **15** of them enumerate a surface this harness claims; the sweep walked
-  the **7** that describe the surfaces the four reported symptoms live on — `tui.md`, `keybindings.md`,
+  the **7** that describe the surfaces the reported symptoms live on — `tui.md`, `keybindings.md`,
   `slash-commands.md`, `cli.md`, `sessions.md`, `compaction.md`, `configuration.md` — and the audit walks all 15.
 * Those 7 docs hold **228 harvested caps**, claimed by **43 distinct matrix rows** out of 138
   (46 doc-level mentions − 3 rows claimed by two docs). Reconciled with EXACT `names` matching:
@@ -109,7 +109,7 @@ actually parses `argv` spells the literal, which is what keeps them honest witho
 `sessions.md`. The other 95 of 138 rows serve pi's `packages.md`, `extensions.md`, `rpc.md`, `rpc-commands.md`,
 `json.md`, `message-types.md`, `rpc-extension-ui.md`, `session-format.md` — the same rows, in the rendered table.
 
-## The four reported symptoms, as rows
+## Symptom rows — the INPUT plane (a typed prompt, `/model`, dock autocomplete, up-arrow recall)
 
 1. **A typed prompt gets answered and painted** — `native :: pi-tui's fullscreen screen and layout pieces` +
    `native :: pi's in-TUI editor as the input dock` + `native :: session` for the admission, and the answer really
@@ -130,6 +130,77 @@ actually parses `argv` spells the literal, which is what keeps them honest witho
    committed `pi.user` rows (measured at a real pty in `demo/recall.test.mjs`), while pi's own `Editor.history` keeps
    the words ONCE because pi's `addToHistory` skips a CONSECUTIVE duplicate — which is why the writer's fallback
    requestId names the SUBMISSION EVENT (`tui:<pid>:<n>`) rather than the typed words.
+
+## Symptom rows — the RENDERING plane (scrolling, harness status lines, dock hints, refusals)
+
+1. **Scrolling snaps back to the bottom** — `native :: pi's alt-screen keybinding actions (pi's fullscreen viewport,
+   which IS this harness's pi-style screen)` and `native :: pi-tui's fullscreen screen and layout pieces`. The scroll
+   state lives INSIDE pi's `ScrollView` (`followingEnd`/`currentScrollTop`/`transientScrollbarVisible`) in the ONE
+   container pi-tui composes — pi-tui's `scroll-view.js` THROWS on a second `addChild`/`removeChild`/`clear`, so a
+   rebuilt container is not an option — and pi's own `TuiAltScreen` class matches the 14 `tui.altScreen.*` ids through
+   pi's GLOBAL `getKeybindings()` registry. Measured at a 70×30 real pty: pi's `pageUp` keeps the transcript where it
+   was scrolled, `pageDown` pages back, `ctrl+home` is the document TOP, `ctrl+end` is the document END with pi's
+   transient `┃` scrollbar thumb, and follow-end engages ONLY at the end (a commit typed while the view is scrolled up
+   stays OFF screen; the same commit after `ctrl+end` lands ON screen). `lineUp`/`lineDown`/`halfPageUp`/`halfPageDown`
+   stay UNBOUND at this pin and stay unbound here; `search` answers no id at this dock for any byte form tried.
+2. **The harness's own lines tear across the dock** — `unsupported :: pi's animated status indicators and its program
+   status reporter`, RE-DECIDED for this surface: pi's `IdleStatus`/`WorkingStatusIndicator`/`WorkingIndicatorOptions`/
+   `setWorkingIndicator`/`setEditorWorkingStatusIndicator`/`isEmbeddedStatus` and `ProgramStatusReporter` stay refused BY
+   NAME, but the harness's OWN words are no longer raw stderr over an open window. `src/tui/pidockloop.mjs`' `notes`/`say`
+   hand every such line to `piNoteRows` (`src/tui/piscreen.mjs`), one pi `Text` per line, appended into pi's TRANSCRIPT
+   document AFTER the live rows and BEFORE `statusBox.clear()`, so pi's width handling does ALL the splitting — pi's
+   exported `wrapTextWithAnsi` (pi-tui `dist/utils.d.ts:56`) plus pi's `wrapSingleLine`/`breakLongWord` (`dist/components/text.js`
+   breaks an over-long token character by character). Measured at a 44×26 pty: the ack and the `model:`/`get_available_models:`
+   lines own rows 5-19, pi broke `…/131`+`072/true` mid-token, pi's dock borders stayed at rows 20 and 26, widest painted row
+   44. Raw stderr stays ONLY for runs with no window open (print/JSON/RPC/headless), measured byte-for-byte (459 bytes, diff
+   identical modulo ids) against the same run before the change. The identity triple and the ONE mutation line are unchanged.
+3. **A stale dock hint (`ctrl+k to clear the draft`)** — `native :: pi's editor keybinding actions at pi's own dock`.
+   The ACTION was always pi's: pi-coding-agent's `CustomEditor extends Editor`, so pi-tui's branch
+   `if (kb.matches(data, "tui.editor.deleteToLineEnd")) this.deleteToEndOfLine();` (`dist/components/editor.js:661-662`) runs and
+   its body (`:1393`) deletes `currentLine.slice(this.state.cursorCol)` — CARET→EOL, `keep drop` + five `cursorLeft` + ctrl+k
+   leaves `keep`. The LABEL was the bug; pi's own words are pi's exported `keyHint("tui.editor.deleteToLineEnd", "to delete to
+   end")` (`interactive-mode.js:766`) and pi's `docs/keybindings.md:79` `Delete to line end`. `src/tui/piscreen.mjs` now exports
+   `piDockHints` (the actions this dock actually handles) and `piStatusRows` paints a hint row ONLY when pi's exported
+   `keyText(word)` answers a non-empty key, so an unbound action contributes NO row rather than a false hint. No harness code
+   decodes ctrl+k.
+4. **A refusal BY NAME wipes the typed command** — `shimmed :: pi's slash commands dispatched at pi's own dock, honoured
+   where pi-durable has state`. pi's clear-the-draft rule (`clearEditor()`) still runs for a decision pi-durable RAN (`ran`)
+   or acted on (`quit`); a REFUSED draft goes back through pi's PUBLIC `setText` (pi-tui `dist/components/editor.js:928`) because
+   pi-tui's own `submitValue()` (`:1145`) emptied the state before `onSubmit`, and pi's OWN precedent for a command it could not
+   run is to keep the typed text — `interactive-mode.js:2799` `this.editor.setText(text);` after
+   `showWarning("A bash command is already running…")`, and pi's `showExtensionCustom` `saveEditor`/`restoreEditor`
+   (`:2415`/`:2427`). The refusal WORDING is unchanged pi-durable wording, split only by pi's wrapping; pi's own Esc rule
+   (`onEscape` → cancel → `setText("")`) clears a kept draft. Measured at a 44×26 pty: `/goal keep going` paints over 7 rows
+   and still sits between pi's dock borders on the next frame; the longer command is wrapped by pi's Editor into a TWO-ROW
+   dock draft; the store gains NO `pi.user` row for either, so `writerSubmit` stays the ONE mutation line.
+
+**Measured TWICE in ONE run** — `demo/renderparity.test.mjs` (33 checks) is the RENDERING plane as PAINTED ROWS: the
+SAME 14-keystroke script runs through the committed `scripts/ptydrive.mjs` at a 52×26 pty, once on this tree's `cli.mjs`
+and once on the tree at the tag `checkpoint-pi-tui-parity` (extracted inside the demo with `git archive`; `git ls-files
+node_modules` prints nothing, so the extracted tree gets a symlink to the SAME pinned pi — only the code under test
+changes). Rows are rebuilt from pi-tui's painted bytes after every frame end, and a keystroke that changed no frame means
+the screen UNCHANGED, which is what makes the tagged tree answering `ctrl+end` with no repaint a measurement. Every rule
+this goal fixed is recorded PASSING here and FAILING on the tagged screen in the same run:
+
+* scrolling: pi's `pageUp` leaves the view PUT (pi's document-top row present, the newest prompt absent, 1 repaint) against
+  the tagged tree's snap-back (top absent, newest present, 2 repaints); the view is still PUT after the NEXT prompt (3
+  repaints vs 2); follow-end is NOT at the content end after a fifth prompt and IS after `ctrl+end` here (false/true)
+  against the tagged tree already pinned to the end (true/true); `ctrl+end` REPAINTS (1 frame, pi's `┃` thumb on 7 rows)
+  against 0 repaints and 0 thumb rows there; 24 frames painted here against 22 there.
+* harness lines: `submitted:`/`set_model:` rows sit between pi's two dock borders in 17 of the tagged tree's 22 frames and
+  in 0 of this screen's 24; `status=placed` owns a row of its own under its `submitted:` row in 16 frames here and 0 there;
+  the widest row carrying an ack line is 52 — exactly the terminal width — here and 64 there.
+* hints: 24 frames carry a dock hint row equal to pi's exported `keyHint("tui.editor.deleteToLineEnd", …)` output here and
+  0 there; pi-durable's stale `to clear the draft` label appears 0 times in this capture and 2 times in the tagged one.
+* refusals: the refused draft stays IN the dock (1 of 1 dock rows) here and 0 of 1 there; the `refused:` block spans 6 rows
+  of at most 52 characters here against ONE row 262 characters wide there.
+* unchanged, recorded holding on BOTH screens: pi's Box borders are WHOLE in every frame (0 bad frames on each side), pi's
+  Esc still clears a kept draft, the refusal still closes with `refused by name` and names the verb (6 rows here, 1 there),
+  every `submitted:` row still spells `requestId=` and `submissionId=` (85 rows here, 16 there), both runs exit 0 answering
+  all 14 keystrokes, and the store gains the SAME 7 `pi.user` rows with NO `/goal` row on EITHER tree — the refusal's
+  WORDING is byte-identical between the two screens once spaces are stripped (229 characters each).
+
+Everything else on those surfaces stays refused BY NAME in pi's own words, in the rows above and below.
 
 ## Re-measure it
 

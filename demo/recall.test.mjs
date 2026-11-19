@@ -32,7 +32,7 @@
 // helper `scripts/ptydrive.mjs` (python3's standard-library `pty`, ONE keystroke per pty write, ENTER as
 // \r, pi's up arrow as ESC[A written ONCE): a pty is a kernel object, not a socket, and the child spells
 // `--faux`, so that section is still offline - it exists because the symptom the user reported is a human
-// pressing the up arrow at a real terminal, and pi's alt screen overpaints a captured terminal's head.
+// pressing the up arrow at a real terminal, and pi's paint is what that human sees.
 import { spawn } from "node:child_process";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -428,12 +428,16 @@ async function main() {
  record(ptyRun.error === null && ptyRun.exit === 0 && ptyRun.sent === 3,
   "the real cli at its pi-style dock took pi's typed ENTER, pi's UP ARROW as ONE pty write (ESC[A), and pi's quit word, then exited cleanly",
   `exit=${ptyRun.exit} keystrokesWritten=${ptyRun.sent} paintedBytes=${ptyRun.screen.length} error=${ptyRun.error ?? "-"}`);
- // pi's alt screen overpaints the head of the child's stderr lines as it repaints, so each ack is matched by
- // pi-durable's OWN identity triple anywhere in the paint rather than by a line prefix.
+ // The ack is now painted as its OWN wrapped transcript row (the alt screen is open, so pidockloop's `say`
+ // routes it into the document rather than into raw stderr), so each ack is matched by pi-durable's OWN
+ // identity triple anywhere in the paint rather than by a line prefix. A painted row stays visible while
+ // later frames change around it, so the same triple can be matched MORE THAN ONCE; what counts is the
+ // number of DISTINCT triples, which is the number of prompts pi-durable admitted.
  const ptyAcks = [...ptyRun.plain.matchAll(/requestId=(\S+) submissionId=(\d+) status=(\w+)/g)];
- record(ptyAcks.length === 2 && new Set(ptyAcks.map((m) => m[1])).size === 2 && new Set(ptyAcks.map((m) => m[2])).size === 2 && ptyAcks.every((m) => m[3] === "placed" || m[3] === "queued" || m[3] === "done"),
-  "at the real terminal the recalled line became its OWN new prompt: TWO acks carrying TWO distinct requestIds and TWO distinct submissionIds, each admitted",
-  `acks=${JSON.stringify(ptyAcks.map((m) => m.slice(1)))}`);
+ const ptyAckTriples = new Set(ptyAcks.map((m) => m.slice(1).join("/")));
+ record(ptyAckTriples.size === 2 && ptyAcks.every((m) => m[3] === "placed" || m[3] === "queued" || m[3] === "done"),
+  "at the real terminal the recalled line became its OWN new prompt: TWO admitted prompts, proven by TWO DISTINCT requestId/submissionId/status triples in pi's paint (each admitted once), not by counting painted rows",
+  `distinctTriples=${ptyAckTriples.size} matches=${ptyAcks.length} triples=${JSON.stringify([...ptyAckTriples])}`);
  const ptyRows = await storeUserTexts(ptyStore);
  record(ptyRows.filter((text) => text === typed).length === 2,
   "the store carries a pi.user row for the typed prompt AND for the prompt pi's up arrow recalled and resubmitted - a recalled line is a new prompt in pi's own rule, so pi-durable commits it and pi answers it again",

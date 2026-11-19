@@ -10,8 +10,9 @@
 // here. WHAT CHANGED versus that demo's inline allocator: nothing in behaviour - the python shape is the
 // same (stdlib `pty.openpty`, `tty.setraw`, `select`-bounded reads, SIGTERM then bounded drain) - but it is
 // now ONE committed, reusable, SEGMENT-BY-KEYSTROKE tool instead of a String.raw block copied per demo.
-// DROPPED on purpose, named rather than reimplemented: no winsize/ioctl sizing (this harness's CLI takes
-// --width/--height itself), no mouse-sequence decoding, no key REPLAY (a human run types once).
+// DROPPED on purpose, named rather than reimplemented: no winsize sizing by DEFAULT (this harness's
+// CLI takes --width/--height itself; `--winsize` only sizes the pty when a caller asks for a small,
+// fixed screen so a capture is readable), no mouse-sequence decoding, no key REPLAY (a human run types once).
 //
 // WHY python3 AGAIN: Node has no pty primitive and this repo must not add a dependency for a test, so
 // python3's standard-library `pty` module allocates the terminal. The code under test never sees python:
@@ -28,14 +29,22 @@ import { writeFileSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
 // The allocator. argv[1] is JSON { argv, feeds: [hex...], timeout, after, gap }; stdout is JSON
-// { exit, sent, segments: [[label, hexBytes]...] }. Segments are split per keystroke so a reader can tell
-// WHICH keystroke produced WHICH paint, which one concatenated dump cannot show. Painted bytes are carried
+// { exit, sent, segments: [[label, hexBytes]...] }. Segments are cut AT the keystroke writes and each one
+// is LABELLED WITH THE KEYSTROKE WHOSE PAINT IT HOLDS - a keystroke's effect arrives in the window after its
+// own write, so a window is closed at the NEXT write and named for the keystroke that produced it ("response
+// to keystroke3 ..."); the first window is "startup paint before the first keystroke". That is how a reader
+// tells WHICH keystroke produced WHICH paint instead of guessing an off-by-one off the write that closed the
+// window. Painted bytes are carried as hex so no control byte survives or dies through JSON.
 // as hex so no control byte survives or dies through JSON.
 const PY = String.raw`
 import json, os, pty, tty, subprocess, select, sys, time, signal
 opt = json.loads(sys.argv[1]); feeds = [bytes.fromhex(x) for x in opt["feeds"]]
 timeout = float(opt["timeout"]); after = float(opt["after"]); gap = float(opt["gap"])
 master, slave = pty.openpty()
+# pi's own size rule (process.stdout.columns, else --width/--height) reads the TERMINAL's winsize when
+# one exists, so a capture that must be small asks the pty for that size explicitly - python stdlib tty.
+if opt["winsize"]:
+  (getattr(tty, "tcsetwinsize", None) or tty.ttysetwinsize)(slave, [int(opt["winsize"][1]), int(opt["winsize"][0])] if hasattr(tty, "tcsetwinsize") else (int(opt["winsize"][1]), int(opt["winsize"][0])))
 proc = subprocess.Popen(opt["argv"], stdin=slave, stdout=slave, stderr=slave, preexec_fn=lambda: tty.setraw(slave))
 os.close(slave)
 out_ref = [b""]
@@ -56,17 +65,21 @@ def close(label):
 # pi-tui's start() negotiates the keyboard protocol and raw mode before any keystroke is taken; a human's
 # first keystroke always arrives after that, so the first feed waits for the first paint.
 sent = 0
+# A window's label names the keystroke whose PAINT the window holds, and the window is closed at the NEXT
+# write (bytes arrive after the write that asked for them).
+pending = "startup paint before the first keystroke"
 t0 = time.time()
 while time.time() - t0 < timeout:
   if proc.poll() is not None: break
   need = after if sent == 0 else gap
   if sent < len(feeds) and time.time() - t0 >= need:
+    close(pending)
     os.write(master, feeds[sent]); sent += 1
-    close("keystroke%d %r" % (sent, feeds[sent - 1]))
+    pending = "response to keystroke%d %r" % (sent, feeds[sent - 1])
     t0 = time.time()
   else:
     drain(gap if sent >= len(feeds) else 0.05)
-close("painted since the last keystroke" if sent else "before the first keystroke")
+close(pending)
 if proc.poll() is None:
   proc.send_signal(signal.SIGTERM)
   drain(6)
@@ -100,7 +113,7 @@ function decodeKeystroke(text) {
 
 const argv = process.argv.slice(2);
 const feeds = [];
-const opts = { timeout: 25, after: 1.5, gap: 0.6, capture: null, quiet: false, json: false };
+const opts = { timeout: 25, after: 1.5, gap: 0.6, capture: null, quiet: false, json: false, winsize: null };
 const child = [];
 let mode = "opts";
 for (let i = 0; i < argv.length; i++) {
@@ -117,6 +130,7 @@ for (let i = 0; i < argv.length; i++) {
  if (t === "--timeout") { opts.timeout = Number(argv[++i]); continue; }
  if (t === "--after") { opts.after = Number(argv[++i]); continue; }
  if (t === "--gap") { opts.gap = Number(argv[++i]); continue; }
+ if (t === "--winsize") { opts.winsize = [argv[++i], argv[++i]]; continue; }
  if (t === "--quiet") { opts.quiet = true; continue; }
  if (t === "--json") { opts.json = true; continue; }
  if (t === "--help" || t === "-h") {
@@ -124,7 +138,9 @@ for (let i = 0; i < argv.length; i++) {
   console.log("                [--capture PREFIX] [--timeout S] [--after S] [--gap S] [--quiet] [--json] -- <child argv>");
   console.log("  keystroke escapes: \\r ENTER, \\e ESC (so \\e[A is pi's up arrow), \\t TAB, \\n LF, \\xHH any byte.");
   console.log("  every keystroke is ONE write to a real pty slave, so the child sees a terminal, not a pipe.");
+  console.log("  a segment's label names the keystroke whose PAINT the segment holds ('response to keystrokeN ...').");
   console.log("  --capture PREFIX writes PREFIX.screen (raw painted bytes) and PREFIX.plain (pi-tui's own stripped text).");
+  console.log("  --winsize COLS ROWS sizes that terminal (pi's own size rule reads the terminal first).");
   process.exit(0);
  }
  console.error(`ptydrive: not a helper flag: ${t}`);
@@ -135,7 +151,7 @@ if (!child.length) { console.error("ptydrive: no child argv after --"); process.
 async function awaitExit(proc) { return await new Promise((done) => proc.once("exit", done)); }
 
 async function run(childArgv) {
- const helper = spawn("python3", ["-c", PY, JSON.stringify({ argv: childArgv, feeds, timeout: opts.timeout, after: opts.after, gap: opts.gap })], { stdio: ["pipe", "pipe", "pipe"] });
+ const helper = spawn("python3", ["-c", PY, JSON.stringify({ argv: childArgv, feeds, timeout: opts.timeout, after: opts.after, gap: opts.gap, winsize: opts.winsize })], { stdio: ["pipe", "pipe", "pipe"] });
  let out = "";
  let err = "";
  helper.stdout.on("data", (chunk) => { out += chunk.toString(); });

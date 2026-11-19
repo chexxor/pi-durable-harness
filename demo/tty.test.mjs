@@ -57,7 +57,10 @@ while time.time() - t0 < 20:
   except OSError: break
   # pi-tui's start() negotiates the keyboard protocol and raw mode before any keystroke is taken;
   # a human's first keystroke always arrives after that, so the feeds wait for the first paint.
-  if sent < len(feeds) and time.time() - t0 > 1.5:
+  # A HUMAN types a line, reads the answer, then types the next one, so the feeds are spaced apart
+  # rather than arriving back to back: the window paints pi-durable's own acknowledgement row BETWEEN
+  # keystrokes, and back-to-back feeds land both drafts in ONE drain, which leaves nothing to repaint.
+  if sent < len(feeds) and time.time() - t0 > 1.5 + 2.5 * sent:
     os.write(master, feeds[sent]); sent += 1
   if proc.poll() is not None: break
 # Still alive after the feeds: send the ordinary interrupt, which the child handles by running its
@@ -164,9 +167,14 @@ async function main() {
  record(/theme=(?!pi's builtin)/.test(term.stream),
   "the terminal run paints with pi's discovered theme (its own report names the palette it used)",
   `theme=${(term.stream.match(/theme=[^\r\n]*/) ?? [""])[0].slice(0, 120)}`);
- record(term.stream.includes("submitted:"),
-  "the terminal's typed line reached the session this process owns (the window acknowledged the submission)",
-  `acks=${term.stream.split(/\r|\n/).filter((l) => l.includes("submitted:")).length}`);
+// The window is OPEN here, so pi-durable's acknowledgement is PAINTED as its own wrapped row in pi's
+// transcript region (src/tui/pidockloop.mjs' `say` routes it there while a window is open) rather than
+// written raw to stderr; pi pads a row to the terminal's width, so the wording and pi-durable's identity
+// triple stay contiguous inside pi's OWN stripped paint, ONE match per submission.
+const termAcks = [...stripTerminalSequences(term.stream).matchAll(/submitted: requestId=(\S+) submissionId=(\d+) status=(\w+)/g)];
+record(termAcks.length === 1 && termAcks[0]?.[3] === "placed",
+  "the terminal's typed line reached the session this process owns: the window painted pi-durable's OWN acknowledgement row, wording and identity triple intact, with pi's dock left whole",
+  `ackRows=${JSON.stringify(termAcks.map((m) => m[0]))}`);
  record(!term.stream.includes("print mode needs a prompt"),
   "a terminal run with no prompt asked for the INTERACTIVE window, not print mode (chooseSurface's TTY rule)",
   `streamBytes=${term.stream.length}`);
@@ -210,9 +218,10 @@ async function main() {
   // ownership claim belong. Same pty, same assertions.
   const npmTerm = await inTerminal(["npm", "run", "cli", "--", "--store", store, "--cwd", ROOT, "--faux", "the npm answer"],
    [Buffer.from(`${typed} again\r`).toString("hex"), Buffer.from("quit\r").toString("hex")]);
-  record(npmTerm.error === null && npmTerm.exit === 0 && npmTerm.stream.includes("plane:") && npmTerm.stream.includes("submitted:"),
-   "`npm run cli` (npm's pass-through form for the flags) opens the same interactive window in a terminal",
-   `exit=${npmTerm.exit} plane=${npmTerm.stream.includes("plane:")} ack=${npmTerm.stream.includes("submitted:")}`);
+  const npmAcks = [...stripTerminalSequences(npmTerm.stream).matchAll(/submitted: requestId=(\S+) submissionId=(\d+) status=(\w+)/g)];
+  record(npmTerm.error === null && npmTerm.exit === 0 && npmTerm.stream.includes("plane:") && npmAcks.length === 1 && npmAcks[0]?.[3] === "placed",
+   "`npm run cli` (npm's pass-through form for the flags) opens the same interactive window in a terminal, and that window painted the acknowledgement row",
+   `exit=${npmTerm.exit} plane=${npmTerm.stream.includes("plane:")} ackRows=${JSON.stringify(npmAcks.map((m) => m[0]))}`);
   const npmReopen = await runNode(["--store", store, "--cwd", dir, "-c", "--mode", "json"]);
   const npmEnds = npmReopen.out.split("\n").flatMap((line) => {
    try { return [JSON.parse(line)]; } catch { return []; }

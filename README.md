@@ -76,7 +76,7 @@ session marker keeps it visibly distinct from pi's own sessions (which are JSONL
 A `--no-session` run says its state is in memory instead of pointing at a file it never wrote. The row
 surface — pi-tui's `TuiMainScreen` painting the frames the headless fixtures assert — stays reachable
 through `--tui`/`--row-view`. `demo/piscreen.test.mjs` (46 checks) proves the viewport, its clipping, pi's
-`Spacer` placement and pi's components against pi-tui's own painted bytes; `demo/pieditor.test.mjs` (32 checks)
+`Spacer` placement and pi's components against pi-tui's own painted bytes; `demo/pieditor.test.mjs` (38 checks)
 proves the typed draft reaches pi's `onSubmit`, that pi's footer words are drawn from pi-durable's committed
 usage in that paint, and that the painted header carries the marker while one painted row carries the URL of
 the store the test claimed; `demo/tty.test.mjs` (21 checks) asserts both lines, pi's `pwd (branch)` footer row
@@ -200,7 +200,7 @@ in a terminal answers from it. pi-ai's faux plane is armed ONLY when `--faux` is
 stays the explicit offline/demo flag rather than a fallback a run performs behind its user's back, and
 the faux warning on stderr appears ONLY on a run that did not ask for a real model — never on a plain one.
 Nothing is guessed: a run that asks for a real model while pi's settings name no default says so.
-`demo/modeldefault.test.mjs` (19 checks, offline) measures the pair end to end — the plane's `modelRef`,
+`demo/modeldefault.test.mjs` (23 checks, offline) measures the pair end to end — the plane's `modelRef`,
 the agent record the Harness opens with, pi's `ModelRegistry.hasConfiguredAuth` for that model, and the
 same pair as pi's screen paints it in its header (`model <provider>/<id>`) and its footer
 (`(<provider>) <id>`) — on a `/quit`-only feed that admits NOTHING, which is why the demo stays in the
@@ -218,8 +218,9 @@ so `/fork 2` is pi's ordinary message), pi's built-in extension commands `/llama
 or `/thinking` spelled with no argument rather than a guessed one. `/quit` leaves through the ordinary
 cleanup (the Harness closes and the writer lock is released) and is NEVER counted as a submitted
 admission, while a whole typed line of `quit` still leaves through pi-durable's own quit-word rule; pi's
-commands this harness does not take are listed by `/help` rather than hidden. `demo/slash.test.mjs` (28
-checks) measures every one of those decisions at the dock, and the capability matrix names each of them.
+commands this harness does not take are listed by `/help` rather than hidden. `demo/slash.test.mjs` (30
+checks) measures every one of those decisions at the dock, including what happens to the typed draft when the
+command is refused, and the capability matrix names each of them.
 
 ## pi-durable vs pi
 
@@ -292,6 +293,53 @@ Honoured — pi's OWN components, mounted rather than reimplemented:
   constructor option at this pin — and `shimmed :: pi's prompt-history recall at the harness's OWN row overlay` covers
   `--tui`/`--row-view`.
 
+The four surfaces reported THIS round are the RENDERING of that screen — scrolling, the harness's own status lines,
+the dock's hint rows, and what a refusal does to the typed draft. Each is a matrix decision that names the pi
+component pi's own code runs, and nothing here reimplements one:
+
+* **scrolling stays exactly where pi's alt-screen keys put it**: pi's `ScrollView` keeps its own scroll state
+  (`followingEnd`/`currentScrollTop`/`transientScrollbarVisible`) inside the ONE container pi-tui's `TuiAltScreen`
+  composes, and pi's own class matches the 14 `tui.altScreen.*` ids through pi's GLOBAL `getKeybindings()` registry,
+  so the harness never re-binds them — pi's `pageUp` leaves the transcript WHERE it was scrolled (the same painted rows
+  persist across the following changed frames, no snap to the bottom), `pageDown` pages back, pi's `ctrl+home` lands on
+  the document TOP and pi's `ctrl+end` lands on the document END with pi's transient `┃` scrollbar thumb; pi's follow-end
+  engages ONLY once the view sits at that end, so a commit typed while the view is scrolled up stays OFF screen and the
+  same commit typed after pi's `ctrl+end` lands ON screen. pi binds NO default key for `lineUp`/`lineDown`/`halfPageUp`/`halfPageDown`
+  at this pin (pi's table carries `defaultKeys` [] and `getKeys` answers []), pi's `search` keystroke answers no id at
+  this dock for any byte form tried here, and nothing here invents a key or binds an unbound action.
+* **the harness's own status/metadata lines become their OWN WRAPPED rows in pi's transcript region while the window is
+  open** — `src/tui/pidockloop.mjs`' `notes`/`say` hand every such line to pi's `piNoteRows` (`src/tui/piscreen.mjs`), one
+  pi `Text` per line, so pi's width handling does ALL the splitting: pi's exported `wrapTextWithAnsi` (pi-tui `dist/utils.d.ts:56`)
+  plus pi's `wrapSingleLine`/`breakLongWord` (`dist/components/text.js` breaks a token longer than the width character by
+  character). The ack triple `submitted: requestId=… submissionId=… status=…`, a `model: set_model: …` line and a refusal
+  line each take as many rows as pi's width handling needs and NO painted row is wider than the terminal, while pi's bordered
+  dock/draft rows stay whole. Raw stderr writes stay ONLY for runs with no window open (print/JSON/RPC/headless) — measured
+  byte-for-byte against the same run before the change. pi's animated indicators (`IdleStatus`, `WorkingStatusIndicator`,
+  `setWorkingIndicator`, `setEditorWorkingStatusIndicator`, `isEmbeddedStatus`) and pi's `ProgramStatusReporter` stay
+  refused BY NAME: this screen draws pi-durable's `LiveState` as pi `Text` rows instead.
+* **the dock's hint rows say pi's own `keyHint` words, and only for actions this dock actually handles**: the ctrl+k ACTION
+  was already pi's — pi-coding-agent's `CustomEditor extends Editor`, so pi-tui's own Editor branch
+  `if (kb.matches(data, "tui.editor.deleteToLineEnd")) this.deleteToEndOfLine();` (`dist/components/editor.js:661-662`) runs,
+  and its body (`:1393`) deletes `currentLine.slice(this.state.cursorCol)` — CARET to END OF LINE, leaving the words before
+  the caret ALONE. What was wrong was pi-durable's LABEL `ctrl+k to clear the draft`, which named neither pi's words nor a
+  true action; pi's own dock hint line is `keyHint("tui.editor.deleteToLineEnd", "to delete to end")`
+  (`dist/modes/interactive/interactive-mode.js:766`) and pi's `docs/keybindings.md:79` spells the same id `Delete to line end`.
+  `src/tui/piscreen.mjs` now carries `piDockHints` as the list of actions this dock handles, and `piStatusRows` paints a hint
+  row ONLY when pi's exported `keyText(word)` answers a non-empty key — an action pi binds no key to contributes NO row
+  rather than a false hint.
+* **a refusal BY NAME wraps into as many screen rows as pi's width handling needs, and the typed command STAYS in the dock**:
+  for a decision pi-durable RAN (`ran`) or acted on (`quit`) pi's clear-the-draft rule (`clearEditor()`) still runs; for a
+  refusal the typed draft is handed BACK to pi's Editor through pi's PUBLIC `setText` (pi-tui `dist/components/editor.js:928`),
+  because pi-tui's own `submitValue()` (`:1145`) empties the state BEFORE `onSubmit` runs and pi's OWN precedent for a command
+  it could not run is to keep the typed text — pi's `showWarning("A bash command is already running…"); this.editor.setText(text);`
+  (`interactive-mode.js:2798-2799`) and pi's `showExtensionCustom` save-and-restore (`:2415`/`:2427`). pi's own Esc rule then
+  clears a kept draft, which is what a human uses to drop one. The refusal WORDING is unchanged pi-durable wording, split only
+  by pi's wrapping (measured at a 44×26 pty: `/goal keep going` paints over 7 rows and still sits BETWEEN pi's dock borders;
+  the longer command is wrapped by pi's Editor itself into a TWO-ROW dock draft, and the store gains NO `pi.user` row for
+  either, so the refusal never reaches `submitDraft` and `writerSubmit` stays the ONE mutation line; re-measured at a 52×26
+  pty by `demo/renderparity.test.mjs`, where the SAME refusal words occupy 6 rows of at most 52 characters on this screen
+  against ONE 262-character row on the tree at `checkpoint-pi-tui-parity`).
+
 Refused BY NAME — pi has them, pi-durable has no plane for them at this pin, and the refusal prints pi's own words:
 pi's selector dialogs and their keybindings (`/settings`, `/scoped-models`, `app.model.select`, `app.models.*`,
 `app.thinking.*`), pi's session picker and tree navigator (`app.session.*`, `app.tree.*`, `/resume`, `/name`, `/import`,
@@ -306,12 +354,25 @@ pi's `Image`/`Markdown`/`SelectList`/`SettingsList`/`Loader`/`CancellableLoader`
 branch summarization, pi's `<agent-dir>/keybindings.json`, `SYSTEM.md` and `APPEND_SYSTEM.md` paths, and pi's
 selection-copy keybinding (`ctrl+c` at the dock is pi's clear/exit key, never copy).
 
-How each of those claims is checked: one committed offline demo per fixed surface — FOUR of them (`autocomplete`, `recall`,
-`keybindings`, `pieditor`) drive a REAL pty through `scripts/ptydrive.mjs`, pi's own python3-stdlib pty helper, one
+How each of those claims is checked: one committed offline demo per fixed surface — FIVE of them (`autocomplete`, `recall`,
+`keybindings`, `pieditor`, `renderparity`) drive a REAL pty through `scripts/ptydrive.mjs`, pi's own python3-stdlib pty helper, one
 keystroke per write, `demo/tty.test.mjs` allocates its own python3 pty inline for the row surface, and the rest
 (`piscreen`, `slash`, `modeldefault`) drive the same code paths in-process — asserting
 against pi-tui's painted bytes read back through pi's PUBLIC `Terminal` interface with pi's own
-`stripTerminalSequences`, not against this harness's notion of what it drew. `node scripts/suite.mjs` runs the lot
+`stripTerminalSequences`, not against this harness's notion of what it drew. `demo/renderparity.test.mjs` (33 checks) is the
+RENDERING plane of the pi-style screen, and it measures the SAME 14-keystroke script TWICE at a 52×26 pty — once on this
+screen, once on the tree at the tag `checkpoint-pi-tui-parity` (extracted with `git archive`, the pinned pi
+symlinked in), i.e. the screen exactly as it was BEFORE this goal touched it — rebuilding the visible rows after every
+pi-tui frame end from the painted bytes. Both captures are read in ONE run, so each of the ELEVEN screen rules this goal
+fixed (pageUp staying put instead of snapping back, the view staying put through the next prompt, follow-end engaging only
+at the bottom, `ctrl+end` actually repainting, ack rows never inside the dock, an ack line owning its own wrapped rows,
+no harness row wider than the terminal, the dock hint row equal to pi's own `keyHint` output, pi-durable's stale
+`to clear the draft` label appearing nowhere, a refused command keeping its text IN the dock, one refusal spanning many
+rows) is recorded PASSING on this screen and FAILING on the tagged one — 22 discriminating checks — while the seven rules
+that must NOT have changed (pi's Box borders whole in every frame, pi's Esc still clearing a kept draft, the refusal still
+BY NAME, the ack identity triple still spelling `requestId=`/`submissionId=`, both runs answering all 14 keystrokes,
+the SAME 7 `pi.user` store rows and no `/goal` row on either tree, and the refusal wording byte-identical once spaces
+are stripped) are recorded holding on BOTH. `node scripts/suite.mjs` runs the lot
 offline (no keys, no network) and reports fail=0; the one proof that needs the network is marked as such in
 `.ai-work/` rather than blended into the offline suite.
 
@@ -337,7 +398,7 @@ from the tags.
 | `src/settings.mjs`, `src/providers.mjs`, `src/spend.mjs` | settings/policy resolution, model plane, money ledger |
 | `src/toolsurface.mjs`, `src/executionenv.mjs` | tool guardrails, custom tools, and the execution environment |
 | `src/packages/` | pi package discovery, pi's own loader, the extension shim, the capability matrix |
-| `demo/` | the offline demo suite (no keys, no network); `*-interactive`/`*-writer`/`*-reader` are fixtures; `tty`/`autocomplete`/`recall`/`keybindings`/`pieditor`/`piscreen`/`slash`/`modeldefault` are the per-surface parity demos — `autocomplete`/`recall`/`keybindings`/`pieditor` drive a real pty through `scripts/ptydrive.mjs`, `tty` allocates its own python3 pty inline, the rest run in-process |
+| `demo/` | the offline demo suite (no keys, no network); `*-interactive`/`*-writer`/`*-reader` are fixtures; `tty`/`autocomplete`/`recall`/`keybindings`/`pieditor`/`renderparity`/`piscreen`/`slash`/`modeldefault` are the per-surface parity demos — `autocomplete`/`recall`/`keybindings`/`pieditor`/`renderparity` drive a real pty through `scripts/ptydrive.mjs` (`renderparity` drives the SAME script twice, on this tree and on the tree at `checkpoint-pi-tui-parity`), `tty` allocates its own python3 pty inline, the rest run in-process |
 | `scripts/` | `suite.mjs` (demos + audits), `sync-pi.mjs`, `render-matrix.mjs`, `ptydrive.mjs` (the committed pty driver every TUI proof runs through), the three audits |
 | `docs/` | capability matrix, the pi-parity sweep, attach semantics, provenance table, execution protocol |
 
@@ -345,7 +406,7 @@ from the tags.
 
 Every source file carries a header naming the Durian-Pi file it was extracted from — and what was
 changed or omitted — or saying outright that there is no Durian-Pi original. `scripts/audit-provenance.mjs`
-checks that claim against the tree (`PROVENANCE PASS: 115/115 source files carry a header`), and
+checks that claim against the tree (`PROVENANCE PASS: 125/125 source files carry a header`), and
 `docs/provenance.md` is that audit's output: a table of file → source → what changed, so the extraction is
 re-derivable rather than a paragraph of prose.
 

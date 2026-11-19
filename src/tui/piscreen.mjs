@@ -25,7 +25,7 @@
 // LiveState, pi-durable's usage plane, pi's ModelRecord). It never opens storage and never mutates
 // a conversation, so a headless demo can paint it without a TTY.
 
-import { AssistantMessageComponent, calculateContextTokens, CompactionSummaryMessageComponent, CustomMessageComponent, CustomEditor, FooterComponent, SkillInvocationMessageComponent, Theme, ToolExecutionComponent, UserMessageComponent, getMarkdownTheme, getSelectListTheme, initTheme, keyHint } from "@earendil-works/pi-coding-agent";
+import { AssistantMessageComponent, calculateContextTokens, CompactionSummaryMessageComponent, CustomMessageComponent, CustomEditor, FooterComponent, SkillInvocationMessageComponent, Theme, ToolExecutionComponent, UserMessageComponent, getMarkdownTheme, getSelectListTheme, initTheme, keyHint, keyText } from "@earendil-works/pi-coding-agent";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Box, CombinedAutocompleteProvider, Container, KeybindingsManager, ScrollView, Spacer, TUI_KEYBINDINGS, Text, VStack } from "@earendil-works/pi-tui";
@@ -312,8 +312,16 @@ function textOf(message) {
  * when `this.chatContainer.children.length > 0`, and BEFORE a `case "compactionSummary"` / `case "branchSummary"`
  * row UNCONDITIONALLY. `appended` counts pi's chat rows only - pi's header lives in its own
  * headerContainer, so the first committed entry gets no spacer even under a painted header. */
-export function piTranscriptDocument({ entries, ui, cwd = null, markdownTheme = piMarkdownTheme(), pendingTools = {}, outputPad = 1, prepend = [] }) {
- const document = new Container();
+export function piTranscriptDocument({ entries, ui, cwd = null, markdownTheme = piMarkdownTheme(), pendingTools = {}, outputPad = 1, prepend = [], existing = null }) {
+ // pi keeps ONE `chatContainer` alive for the whole session (`createChatViewport` runs once, and
+ // `addMessageToChat` only `addChild`s to that same container between frames), so the transcript rows
+ // have to go into ONE container over ONE ScrollView: pi's OWN scroll state lives in the ScrollView
+ // (`followingEnd` starts true, `scrollTop` 0), so a fresh ScrollView per paint resets the view to the
+ // bottom and throws away everything pi's `tui.altScreen.pageUp`/`top` just scrolled. `existing` is that
+ // same container, emptied and refilled in place; a caller that builds the document once keeps the
+ // fresh-container behaviour unchanged.
+ const document = existing ?? new Container();
+ if (existing) document.clear();
  const classOf = {};
  let spacers = 0;
  // pi prints its startup header INTO the transcript, oldest-first, so a header component goes in BEFORE
@@ -340,7 +348,15 @@ export function piTranscriptDocument({ entries, ui, cwd = null, markdownTheme = 
  return { document, classOf, spacers };
 }
 
-/** pi's chat viewport: pi's `createChatViewport` (chat-viewport.js) re-derived at this pin. */
+/** pi's chat viewport: pi's `createChatViewport` (chat-viewport.js) re-derived at this pin, literally -
+ * one ScrollView `{ follow: "end", primary: true, overscroll: "chain", scrollbar }`, one dock VStack at
+ * pi's own shrink/minSize ladder, and the root VStack of that transcript over that dock. pi builds this
+ * ONCE per session and keeps it, so the caller has to keep the SAME `document`, `status` and `footer`
+ * containers across paints and refill them (pi's ScrollView cannot take a second child and cannot be
+ * cleared: dist/components/scroll-view.js throws on addChild/removeChild/clear), which is what keeps
+ * pi's scroll position and pi's transient scrollbar across frames; `follow: "end"` is pi's own rule that
+ * the view sticks to the content end ONLY while it sits at that end (pi's `ScrollView.scrollTo`
+ * `{ disableFollow }` and `followSuppressedAtEnd` carry the other half of that rule). */
 export function piScreen({ document, editor, status = null, footer = null, pendingMessages = null, scrollbar = "auto" }) {
  const transcript = new ScrollView(document, { follow: "end", primary: true, overscroll: "chain", ...(scrollbar ? { scrollbar } : {}) });
  const dock = new VStack([
@@ -356,6 +372,20 @@ export function piScreen({ document, editor, status = null, footer = null, pendi
    { component: dock, basis: "auto", grow: 0, shrink: 1, minSize: 1 },
   ]),
  };
+}
+
+/** The harness's OWN status/metadata lines as their OWN rows in pi's TRANSCRIPT region (see
+ * src/tui/pidockloop.mjs' `say`, which hands them here while pi's alt screen is open). pi's `Text`
+ * component does the width handling: dist/components/text.js `render(width)` word-wraps with
+ * pi's own `wrapTextWithAnsi(normalizedText, contentWidth)` and pi's `wrapSingleLine` breaks a token
+ * longer than the width character by character (`breakLongWord`), so ONE long line becomes >1 screen
+ * ROW and no row is wider than the terminal - no split is spelled here. They are pi-durable's words
+ * (pi-durable's acknowledgement triple, pi-durable's refusal by name, pi-durable's `expanded ...`
+ * hint), never a narrator's summary, and pi's installed `dim` token is the only colour touched here.
+ * They go into pi's chatContainer (the ScrollView's document), NOT into pi's dock VStack, which is
+ * what keeps pi's bordered draft area whole. */
+export function piNoteRows(lines) {
+ return lines.map((line) => new Text(piColour("dim", line), 0, 0));
 }
 
 /** pi's footer context numbers (`contextTokens` from pi-ai's own counter, summed over pi-durable's
@@ -501,9 +531,34 @@ export function piModelRecordOf(models, ref) {
  return { id: `${ref.provider}/${record?.id ?? ref.model}`, provider: ref.provider, contextWindow: record?.contextWindow, reasoning: Array.isArray(record?.thinkingLevels) ? true : record?.reasoning };
 }
 
+/** The actions the dock may HINT, as [pi-tui's keybinding WORD, pi's OWN description]. A hint may name
+ * ONLY an action the dock serves, so this list is deliberately one short: pi's app-level actions (`app.interrupt`,
+ * `app.thinking.cycle`, `app.model.select`, `app.suspend`, pi's own startup hint list in
+ * dist/modes/interactive/interactive-mode.js) get NO row here, because pi-durable registers no handler for
+ * them at this pin (see src/packages/matrix.mjs, which names them as unsupported).
+ *
+ * `tui.editor.deleteToLineEnd` IS served, by pi's OWN Editor and with pi's OWN keystroke: pi-tui's
+ * dist/components/editor.js reads the keystroke through pi's table
+ * (`if (kb.matches(data, "tui.editor.deleteToLineEnd")) { this.deleteToEndOfLine(); return; }`) and pi-tui's
+ * keybindings.js binds it (`"tui.editor.deleteToLineEnd": { defaultKeys: "ctrl+k", description: "Delete to
+ * line end" }`), so pi-durable registers no handler here and decodes NO escape byte itself.
+ *
+ * The description below is pi's OWN wording, copied from pi's dist: pi's header spells the very same hint
+ * `keyHint("tui.editor.deleteToLineEnd", "to delete to end")` (dist/modes/interactive/interactive-mode.js),
+ * and pi's own docs/keybindings.md table row is `| tui.editor.deleteToLineEnd | ctrl+k | Delete to line end |`.
+ * pi-durable's earlier label for it ("to clear the draft") was neither pi's wording nor a true description of
+ * pi's rule: pi's `deleteToEndOfLine()` deletes from the CARET to the end of the LINE and leaves the text
+ * before the caret alone, so the row read as a stale promise to a user at the terminal. Nothing is invented
+ * here, and `keyHint` itself spells the key out of pi's table - never a hand-written `ctrl+k` string. */
+export const piDockHints = [["tui.editor.deleteToLineEnd", "to delete to end"]];
+
 /** pi's status rows from pi-durable's `LiveState` (nothing is guessed: no run means an idle row, and
- * the partial text is pi-durable's throttled `generation.message`, its tool rows are `ToolSlot`s). */
-export function piStatusRows(live, { width = Infinity } = {}) {
+ * the partial text is pi-durable's throttled `generation.message`, its tool rows are `ToolSlot`s), then
+ * pi's OWN hint rows for `piDockHints` - and only for an action pi's table actually BINDS: pi's `keyText`
+ * reads the keys back out of pi's keybinding table and answers "" for an action pi binds no key to
+ * (pi's own `keyHint` would then draw a bare description), so an action pi does not bind contributes NO
+ * row rather than a hint with no key in front of it. */
+export function piStatusRows(live, { hints = piDockHints, width = Infinity } = {}) {
  const rows = [];
  const partial = textOf(live?.generation?.message);
  const tools = Array.isArray(live?.tools) ? live.tools : [];
@@ -514,9 +569,13 @@ export function piStatusRows(live, { width = Infinity } = {}) {
  if (tools.length) {
   rows.push(new Text(dim(tools.map((slot) => `${slot?.name ?? "tool"} ${slot?.status ?? "?"}`).join("; ")), 0, 0));
  }
- // pi's own hint that interrupting is possible, spelled with pi-tui's keybinding name (pi's app-level
- 	// names such as `app.interrupt` are not importable at this pin, so their text is left out).
- rows.push(new Text(keyHint("tui.editor.deleteToLineEnd", "to clear the draft"), 0, 0));
+ // One hint row per pi-durable's served actions (see `piDockHints`), spelled by pi's OWN helpers: pi's
+ // `keyText` takes the WORD, pi's table gives the key back, pi's `keyHint` joins key and description. A
+ // word pi's table binds no key to paints NOTHING - no hint for an action pi does not handle.
+ for (const [keybinding, description] of hints) {
+  if (!keyText(keybinding)) continue;
+  rows.push(new Text(keyHint(keybinding, description), 0, 0));
+ }
  return rows;
 }
 

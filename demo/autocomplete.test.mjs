@@ -127,7 +127,10 @@ record(visible > maxVisible,
 const capture = join(CWD, "run");
 const drive = [
  "--capture", capture, "--timeout", "45", "--after", "3", "--gap", "0.8",
- "--keystroke", "/se", "--keystroke", "\\r", "--keystroke", "/mo", "--keystroke", "\\r", "--keystroke", "/quit\\r",
+ // pi's own Esc cancels the draft at the dock, and this harness keeps a REFUSED-BY-NAME draft in pi's
+ // Editor (src/tui/pidockloop.mjs, pi's own rule for a command it could not run: interactive-mode.js:2799
+ // `this.editor.setText(text)`), so a human's Esc is what separates the two partial commands here.
+ "--keystroke", "/se", "--keystroke", "\\r", "--keystroke", "\\x1b", "--keystroke", "/mo", "--keystroke", "\\r", "--keystroke", "\\x1b", "--keystroke", "/quit\\r",
  "--quiet", "--", "node", CLI, "--store", STORE, "--cwd", CWD, "--width", "78", "--height", "20", "--faux", "probe",
 ];
 let painted = "";
@@ -147,7 +150,7 @@ record(/\(\d+\/\d+\)/.test(painted),
  "the menu shows pi's OWN `(n/total)` counter, so pi knows it clipped a longer list",
  `counter=${/(\(\d+\/\d+\))/.exec(painted)?.[1] ?? "none"}`);
 record(!painted.includes("status=placed") && !painted.includes("nothing was typed"),
- "a PARTIAL command (`/se` ENTER, `/mo` ENTER) became pi's completion + pi's command run, never an agent admission",
+ "a PARTIAL command (`/se` ENTER + pi's Esc, `/mo` ENTER) became pi's completion + pi's command run, never an agent admission",
  `placed=${(painted.match(/status=placed/g) ?? []).length}`);
 const tallyLine = painted.split("\n").filter((line) => line.includes("decisions=")).pop() ?? "";
 record(tallyLine.includes("decisions=") && !tallyLine.includes("fallthrough"),
