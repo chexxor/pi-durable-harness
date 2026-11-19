@@ -19,10 +19,10 @@ Status words, identical in the matrix, in `docs/package-support.md`, and here:
   authority, not pi's marketing copy. **15** of them enumerate a surface this harness claims; the sweep walked
   the **7** that describe the surfaces the reported symptoms live on — `tui.md`, `keybindings.md`,
   `slash-commands.md`, `cli.md`, `sessions.md`, `compaction.md`, `configuration.md` — and the audit walks all 15.
-* Those 7 docs hold **228 harvested caps**, claimed by **43 distinct matrix rows** out of 138
+* Those 7 docs hold **228 harvested caps**, claimed by **43 distinct matrix rows** out of 139
   (46 doc-level mentions − 3 rows claimed by two docs). Reconciled with EXACT `names` matching:
   **60 native / 45 shimmed / 112 unsupported / 11 covered by harness code only** (no row names them — listed below).
-* All 15 docs, all caps: **443 capabilities over 138 rows (51 shimmed / 66 unsupported / 21 native)**, every doc at
+* All 15 docs, all caps: **443 capabilities over 139 rows (51 shimmed / 66 unsupported / 22 native)**, every doc at
   100 %: tui.md 18/18 · keybindings.md 90/90 · configuration.md 20/20 · slash-commands.md 27/27 · cli.md 64/64 ·
   sessions.md 7/7 · compaction.md 2/2 · packages.md 3/3 · extensions.md 130/130 · rpc.md 7/7 · rpc-commands.md 36/36 ·
   json.md 1/1 · message-types.md 13/13 · rpc-extension-ui.md 9/9 · session-format.md 16/16 — sums to 443.
@@ -106,7 +106,7 @@ actually parses `argv` spells the literal, which is what keeps them honest witho
 
 `shimmed :: session identity flags`, `unsupported :: pi's fork-at-invocation flag`,
 `unsupported :: pi's session metadata verbs (and pi's --name at invocation)` — each claimed by both `cli.md` and
-`sessions.md`. The other 95 of 138 rows serve pi's `packages.md`, `extensions.md`, `rpc.md`, `rpc-commands.md`,
+`sessions.md`. The other 96 of 139 rows serve pi's `packages.md`, `extensions.md`, `rpc.md`, `rpc-commands.md`,
 `json.md`, `message-types.md`, `rpc-extension-ui.md`, `session-format.md` — the same rows, in the rendered table.
 
 ## Symptom rows — the INPUT plane (a typed prompt, `/model`, dock autocomplete, up-arrow recall)
@@ -141,7 +141,10 @@ actually parses `argv` spells the literal, which is what keeps them honest witho
    pi's GLOBAL `getKeybindings()` registry. Measured at a 70×30 real pty: pi's `pageUp` keeps the transcript where it
    was scrolled, `pageDown` pages back, `ctrl+home` is the document TOP, `ctrl+end` is the document END with pi's
    transient `┃` scrollbar thumb, and follow-end engages ONLY at the end (a commit typed while the view is scrolled up
-   stays OFF screen; the same commit after `ctrl+end` lands ON screen). `lineUp`/`lineDown`/`halfPageUp`/`halfPageDown`
+   stays OFF screen; the same commit after `ctrl+end` lands ON screen); pi's `pageDown` is FED as pi's OWN bytes `ESC[6~`
+   in `demo/keybindings.test.mjs` (53 checks), and the segment ANSWERING that feed carries the newest prompt row and NO
+   document-top row — the page back is measured on pi's own keystroke, not asserted (that run tallies `topSegments == 2 && endSegments == 3`
+   over 13 segments). pi's mouse wheel is the NEW native row `native :: pi's mouse wheel over the transcript and pi's ScrollView view state (pi's alt-screen wheel path, NOT a keybinding id)`: pi's alt screen decodes `ESC[<64;20;10M`/`ESC[<65;20;10M` through its `parseWheelEvent`/`routeWheel` and hands it to `new WheelScrollAccelerator(options.wheelScrollLines ?? 1)`, pi's dock attributes NO keybinding id to either form, and `demo/scrollwheel.test.mjs` (17 checks) measures at a 48×16 pty that ONE gesture moves EXACTLY ONE transcript row, a wheel-down gesture returns the region EXACTLY, pi's `pageUp` shifts every still-visible row 5 rows down (a page, not a tick) and pi's `pageDown` returns the view EXACTLY — plus pi's `ScrollView` view state read IN PROCESS. `lineUp`/`lineDown`/`halfPageUp`/`halfPageDown`
    stay UNBOUND at this pin and stay unbound here; `search` answers no id at this dock for any byte form tried.
 2. **The harness's own lines tear across the dock** — `unsupported :: pi's animated status indicators and its program
    status reporter`, RE-DECIDED for this surface: pi's `IdleStatus`/`WorkingStatusIndicator`/`WorkingIndicatorOptions`/
@@ -157,12 +160,17 @@ actually parses `argv` spells the literal, which is what keeps them honest witho
 3. **A stale dock hint (`ctrl+k to clear the draft`)** — `native :: pi's editor keybinding actions at pi's own dock`.
    The ACTION was always pi's: pi-coding-agent's `CustomEditor extends Editor`, so pi-tui's branch
    `if (kb.matches(data, "tui.editor.deleteToLineEnd")) this.deleteToEndOfLine();` (`dist/components/editor.js:661-662`) runs and
-   its body (`:1393`) deletes `currentLine.slice(this.state.cursorCol)` — CARET→EOL, `keep drop` + five `cursorLeft` + ctrl+k
-   leaves `keep`. The LABEL was the bug; pi's own words are pi's exported `keyHint("tui.editor.deleteToLineEnd", "to delete to
+   its body (`:1393`) deletes `currentLine.slice(this.state.cursorCol)` — CARET→EOL, and that is now MEASURED at a real
+   70×30 pty in `demo/keybindings.test.mjs`: `keep drop` + FIVE separate pi `cursorLeft` feeds + pi's ONE `0x0b` feed paints
+   a segment carrying pi's `keep` and NO row carrying pi's `drop`, pi's ENTER after it answers `status=placed`, and pi's
+   `ctrl+a` + `0x0b` on `draft hello world` leaves pi's draft EMPTY (that segment carries pi's typed words nowhere) so pi's
+   ENTER answers `status=nothing`/`was typed` and the store's ONLY `pi.user` text for the run is `keep`, read back through
+   `src/readapi.mjs`. The LABEL was the bug; pi's own words are pi's exported `keyHint("tui.editor.deleteToLineEnd", "to delete to
    end")` (`interactive-mode.js:766`) and pi's `docs/keybindings.md:79` `Delete to line end`. `src/tui/piscreen.mjs` now exports
    `piDockHints` (the actions this dock actually handles) and `piStatusRows` paints a hint row ONLY when pi's exported
-   `keyText(word)` answers a non-empty key, so an unbound action contributes NO row rather than a false hint. No harness code
-   decodes ctrl+k.
+   `keyText(word)` answers a non-empty key, so an unbound action contributes NO row rather than a false hint (measured
+   IN PROCESS: `piStatusRows` over `[["tui.editor.historyPrevious", …], ["tui.altScreen.lineUp", …]]` gains only pi's
+   `idle` row, and the bound-plus-unbound mix paints EXACTLY the bound rows). No harness code decodes ctrl+k.
 4. **A refusal BY NAME wipes the typed command** — `shimmed :: pi's slash commands dispatched at pi's own dock, honoured
    where pi-durable has state`. pi's clear-the-draft rule (`clearEditor()`) still runs for a decision pi-durable RAN (`ran`)
    or acted on (`quit`); a REFUSED draft goes back through pi's PUBLIC `setText` (pi-tui `dist/components/editor.js:928`) because
@@ -206,7 +214,7 @@ Everything else on those surfaces stays refused BY NAME in pi's own words, in th
 
 ```
 node scripts/suite.mjs                       # offline demos + audits; expect fail=0
-node scripts/audit-pi-docs.mjs               # 443 caps over pi's 15 docs, 138 rows -> PASS or it names the gap
+node scripts/audit-pi-docs.mjs               # 443 caps over pi's 15 docs, 139 rows -> PASS or it names the gap
 node scripts/audit-provenance.mjs            # provenance header in every source file
 node scripts/audit-orchestration.mjs         # no dependency on the dropped orchestration concepts
 node scripts/render-matrix.mjs > docs/package-support.md   # the ONLY way this table changes

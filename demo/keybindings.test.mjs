@@ -14,7 +14,9 @@
 // dist/keybindings.d.ts - there is no `getAll()`, so ids are enumerated from pi's own tables);
 // pi-coding-agent's app-key table, read off dist/core/keybindings.d.ts (pi's app ids are NOT a runtime
 // export at this pin); pi-tui's `TuiAltScreen` matching its own ids in dist/tui-alt-screen.js; pi's
-// `CustomEditor`/`Editor.handleInput/getText` callbacks (assignments, not constructor options); and
+// `CustomEditor`/`Editor.handleInput/getText` callbacks (assignments, not constructor options); pi-coding-agent's
+// exported `keyText`/`keyHint`/`initTheme` (dist/index.d.ts re-exports them from pi's own modes/interactive code,
+// so the hint wording below is pi's and not a hand-written `ctrl+k` string); and
 // pi's own config readers behind src/packages/loader.mjs, src/settings.mjs and src/providers.mjs.
 // DROPPED on purpose and named in the capability matrix rather than reimplemented: pi's app selector
 // dialogs those app ids open, pi's `<agent-dir>/keybindings.json` user bindings, pi's transcript
@@ -31,7 +33,9 @@ import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { TUI_KEYBINDINGS, getKeybindings, TuiAltScreen, stripTerminalSequences } from "@earendil-works/pi-tui";
-import { piDockOf } from "../src/tui/piscreen.mjs";
+import { keyHint, keyText, initTheme } from "@earendil-works/pi-coding-agent";
+import { piDockOf, entryText, piStatusRows } from "../src/tui/piscreen.mjs";
+import { openStore, readEntries, listConversations } from "../src/readapi.mjs";
 import { loadPiResources, loadContextFiles } from "../src/packages/loader.mjs";
 import { piSettings, agentConfig } from "../src/settings.mjs";
 import { machineProviderConfigs } from "../src/providers.mjs";
@@ -109,6 +113,7 @@ const FORMS = [
  ["\u001b[3;3~", ["tui.editor.deleteWordForward"]],
  ["\u0011", []], ["\u0012", []], ["\u0013", []], ["\u0014", []], ["\u0016", []], ["\u0018", []], ["\u001a", []], ["\u001c", []], ["\u001e", []], ["\u000c", []],
  ["\u001b[102;6U", []], ["\u001b[102;5U", []], ["\u001b[102;3U", []], ["\u001b[576U", []], ["\u001bg", []], ["\u001bz", []], ["\u001b[1;2A", []], ["\u001b[1;2B", []],
+ ["\u001b[<64;20;10M", []], ["\u001b[<65;20;10M", []],
 ];
 const mismatches = FORMS.filter(([form, expected]) => attributed(form).sort().join(",") !== expected.sort().join(","))
  .map(([form, expected]) => `${JSON.stringify(form)} expected=${expected.join("|")} pi=${attributed(form).join("|") || "NOTHING"}`);
@@ -116,8 +121,8 @@ record(mismatches.length === 0,
  `pi's matcher attributes all ${FORMS.length} byte forms exactly as recorded (one action set per form, no invented name)`,
  `mismatches=${mismatches.length} first=${mismatches[0] ?? "none"}`);
 const unmatched = FORMS.filter(([, expected]) => !expected.length).map(([form]) => form);
-record(unmatched.length === 18,
- "pi answers NO action for 18 forms this sweep fed: 10 spare control bytes, pi's transcript-search CSI-u forms and pi's shift+arrow forms",
+record(unmatched.length === 20,
+ "pi answers NO action for 20 forms this sweep fed: 10 spare control bytes, pi's transcript-search CSI-u forms, pi's shift+arrow forms and pi's TWO wheel-gesture forms (a wheel carries no keybinding id - pi's alt screen routes it through its own parseWheelEvent, and demo/scrollwheel.test.mjs measures what that does to pi's view)",
  `none=${unmatched.length} csi=${JSON.stringify(unmatched.filter((form) => form.startsWith("\u001b[")))}`);
 
 // 3) pi's Editor deciding the EFFECT of pi's editor actions (one keystroke per pi call).
@@ -172,6 +177,7 @@ const CWD = mkdtempSync(join(tmpdir(), "dh-altscreen-"));
 const STORE = join(CWD, "s.sqlite");
 const FEEDS = [
  ["pageUp", "1b5b357e", ["tui.editor.pageUp", "tui.select.pageUp", "tui.altScreen.pageUp"]],
+ ["pageDown", "1b5b367e", ["tui.editor.pageDown", "tui.select.pageDown", "tui.altScreen.pageDown"]],
  ["top", "1b5b313b3548", ["tui.altScreen.top"]],
  ["bottom", "1b5b313b3546", ["tui.altScreen.bottom"]],
  ["previousPrompt", "1b5b313b3541", ["tui.altScreen.previousPrompt"]],
@@ -181,20 +187,26 @@ const drive = ["--timeout", "90", "--after", "3", "--gap", "0.9", "--winsize", "
 for (const keystroke of TYPED) drive.push("--keystroke", keystroke);
 for (const [, hex] of FEEDS) drive.push("--feed-hex", hex);
 drive.push("--keystroke", "/quit\\r", "--", "node", CLI, "--store", STORE, "--cwd", CWD, "--width", "70", "--height", "30", "--faux", "probe");
-const segments = [];
-try {
- const out = execFileSync("node", [join(ROOT, "scripts", "ptydrive.mjs"), ...drive], { cwd: ROOT, encoding: "utf8", timeout: 150000 });
- for (const line of out.split("\n")) {
-  const head = /^---- (.*) \((\d+) painted bytes\) ----$/.exec(line);
-  if (head) { segments.push({ label: head[1], rows: [] }); continue; }
-  if (segments.length) {
-   const row = stripTerminalSequences(line).replace(/\r/g, "").trim();
-   if (row) segments[segments.length - 1].rows.push(row);
+// One helper, used by BOTH terminal runs below: split the helper's stdout into the segment a keystroke's
+// OWN paint lives in (that is what the helper's own segment labels say).
+function segmentsOf(driveArgs) {
+ const segs = [];
+ try {
+  const out = execFileSync("node", [join(ROOT, "scripts", "ptydrive.mjs"), ...driveArgs], { cwd: ROOT, encoding: "utf8", timeout: 150000 });
+  for (const line of out.split("\n")) {
+   const head = /^---- (.*) \((\d+) painted bytes\) ----$/.exec(line);
+   if (head) { segs.push({ label: head[1], rows: [] }); continue; }
+   if (segs.length) {
+    const row = stripTerminalSequences(line).replace(/\r/g, "").trim();
+    if (row) segs[segs.length - 1].rows.push(row);
+   }
   }
+ } catch (err) {
+  console.log(`  NOT the pty run failed: ${String(err?.stderr ?? err?.message ?? err)}`.slice(0, 300));
  }
-} catch (err) {
- console.log(`  NOT the pty run failed: ${String(err?.stderr ?? err?.message ?? err)}`.slice(0, 300));
+ return segs;
 }
+const segments = segmentsOf(drive);
 record(segments.length >= 10,
  "the ONE terminal run answered a segment per keystroke, so a reader can tell WHICH byte produced WHICH paint",
  `segments=${segments.length} feeds=${FEEDS.length} labels=${segments.map((e) => e.label.split(" ")[0]).join(",")}`);
@@ -214,6 +226,7 @@ const END_ROW = "third prompt gamma";
 // WHILE it sits at that end, so a scroll feed that moves away from the end stays moved.
 const SHOWS = {
  pageUp: "top",
+ pageDown: "end",
  top: "top",
  bottom: "end",
  previousPrompt: "end",
@@ -239,9 +252,81 @@ record(freshEnd >= 1,
 const feedSegments = FEEDS.map(([, hex]) => segments.find((entry) => entry.label.includes(feedRepr(hex))));
 const topSegments = feedSegments.filter((entry) => (entry?.rows ?? []).some((row) => row.includes(TOP_ROW))).length;
 const endSegments = feedSegments.filter((entry) => (entry?.rows ?? []).some((row) => row.includes(END_ROW))).length;
-record(topSegments === 2 && endSegments === 2,
- "EXACTLY pi's pageUp and pi's ctrl+home responses show pi's document-top header row, and EXACTLY pi's ctrl+end and pi's previousPrompt responses show pi's newest prompt row",
+record(topSegments === 2 && endSegments === 3,
+ "EXACTLY pi's pageUp and pi's ctrl+home responses show pi's document-top header row, and EXACTLY pi's pageDown, pi's ctrl+end and pi's previousPrompt responses show pi's newest prompt row (pi's pageDown pages pi's view BACK to the content end; pi's follow-end alone does not do that)",
  `topSegments=${topSegments} endSegments=${endSegments} total=${segments.length}`);
+
+// 4b) pi's ctrl+k AT A REAL PTY, seen as the PAINT it produces and as what the store actually admits. This
+// is the SECOND terminal run in this file, and it is here because pi's own rule for the delete pair is CARET
+// TO END OF LINE, not "clear the draft": a draft whose caret sits mid-row keeps the words BEFORE the caret,
+// and a draft pi leaves EMPTY admits NOTHING. Every row checked below comes from the segment answering pi's
+// OWN ctrl+k write, and the store is read back through src/readapi.mjs' ONE opener (not through a second one).
+const KDIR = mkdtempSync(join(tmpdir(), "dh-ctrlk-"));
+const KSTORE = join(KDIR, "kstore.sqlite");
+const kbDrive = ["--timeout", "90", "--after", "3", "--gap", "0.9", "--winsize", "70", "30", "--keystroke", "keep drop"];
+for (let i = 0; i < 5; i += 1) kbDrive.push("--feed-hex", "02");
+kbDrive.push("--feed-hex", "0b", "--keystroke", "\\r");
+kbDrive.push("--keystroke", "draft hello world", "--feed-hex", "01", "--feed-hex", "0b", "--keystroke", "\\r");
+kbDrive.push("--keystroke", "/quit\\r", "--", "node", CLI, "--store", KSTORE, "--cwd", KDIR, "--width", "70", "--height", "30", "--faux", "probe");
+const kbSegments = segmentsOf(kbDrive);
+// pi's ctrl+k write is the ONE byte `0x0b`; its label is `response to keystrokeN b'\\x0b'`, so the run answers
+// with one segment per ctrl+k, in the order the bytes were typed (partial delete first, whole-line second).
+const kbCtrlK = kbSegments.filter((entry) => entry.label.includes("b'\\x0b'"));
+const [partialPaint, wholePaint] = kbCtrlK;
+const partialNext = kbSegments[kbSegments.indexOf(partialPaint) + 1] ?? {};
+const wholeNext = kbSegments[kbSegments.indexOf(wholePaint) + 1] ?? {};
+record(kbCtrlK.length === 2 && kbSegments.length >= 14,
+ "the ctrl+k run answers a segment per keystroke and pi's TWO ctrl+k bytes each get their OWN segment, so a reader knows which paint pi's delete produced",
+ `segments=${kbSegments.length} ctrlk=${kbCtrlK.length} labels=${kbSegments.map((entry) => entry.label.split(" ")[0]).join(",")}`);
+record(partialPaint?.rows.some((row) => row.includes("keep")) && partialPaint?.rows.every((row) => !row.includes("drop")),
+ "pi's ctrl+k after FIVE pi cursorLeft keystrokes paints a row carrying pi's `keep` and NO row carries pi's `drop` (pi deleted CARET->EOL, it did NOT clear the draft and it did not keep the whole row)",
+ `bytes=0b ids=${attributed("\u000b").join(",")} painted=${JSON.stringify(partialPaint?.rows ?? [])}`);
+record(wholePaint?.rows.every((row) => !row.includes("draft") && !row.includes("hello") && !row.includes("world")) && wholeNext?.rows.some((row) => row.includes("status=nothing")) && wholeNext?.rows.some((row) => row.includes("was typed")),
+ "pi's ctrl+line-start then pi's ctrl+k leaves pi's draft EMPTY (no painted row in that segment carries pi's typed words), and pi's ENTER on it answers `status=nothing`/`was typed` rather than admitting a turn",
+ `bytes=01 then 0b painted=${JSON.stringify(wholePaint?.rows ?? [])} enter=${JSON.stringify(wholeNext?.rows ?? [])}`);
+record(partialNext?.rows.some((row) => row.includes("status=placed")),
+ "pi's ENTER after the PARTIAL delete DOES admit pi's kept draft (that segment carries pi's `status=placed`), so pi's ctrl+k leaves a real draft behind rather than nothing",
+ `enter=${JSON.stringify(partialNext?.rows ?? [])}`);
+const kbViewer = await openStore(KSTORE);
+const kbConversations = await listConversations(kbViewer);
+const kbTexts = [];
+for (const row of kbConversations) {
+ const page = await readEntries(kbViewer, row.id, { limit: 50 });
+ kbTexts.push(...page.items.filter((entry) => entry?.kind === "pi.user").map((entry) => entryText(entry)).filter((text) => text));
+}
+record(kbTexts.join("\u001e") === "keep",
+ "what the store admits for the WHOLE run is pi's `keep` alone: pi's ctrl+k left pi's `draft hello world` empty and pi's ONE mutation line received NOTHING for it (no pi.user row, no invented refusal)",
+ `conversations=${kbConversations.length} piUserTexts=${JSON.stringify(kbTexts)}`);
+
+// 4c) an action pi binds NO key to contributes NO hint row. The code guard (`if (!keyText(keybinding)) continue`)
+// in src/tui/piscreen.mjs is only honest if it is MEASURED: pi's own `keyText` reads the key back out of pi's
+// keybinding table and answers "" for an id pi binds nothing to, and the rows that DO paint are pi's own
+// `keyHint` output. pi's own descriptions below are pi's (pi's docs/keybindings.md rows for those ids).
+const UNBOUND_HINTS = [
+ ["tui.editor.historyPrevious", "Select the previous prompt history entry"],
+ ["tui.altScreen.lineUp", "Scroll the transcript up by one line"],
+];
+// pi's hint rows carry pi's palette, so pi's theme has to be installed before they paint (pi's own
+// `initTheme`, which pi-coding-agent exports alongside keyText/keyHint).
+initTheme();
+const paintRows = (hints) => {
+ const rows = [];
+ for (const row of piStatusRows(null, { hints })) rows.push(...(row.render(200) ?? []));
+ return rows.map((line) => stripTerminalSequences(line).trim()).filter((line) => line);
+};
+const noHints = paintRows([]);
+const boundHints = paintRows([["tui.editor.deleteToLineEnd", "to delete to end"]]);
+const unboundHints = paintRows(UNBOUND_HINTS);
+const mixedHints = paintRows([["tui.editor.deleteToLineEnd", "to delete to end"], ...UNBOUND_HINTS]);
+record(keyText("tui.editor.deleteToLineEnd") === "ctrl+k" && UNBOUND_HINTS.every(([id]) => keyText(id) === ""),
+ "pi's OWN keyText answers pi's key words for a BOUND id and \"\" for pi's TWO unbound ids (pi's table carries empty defaultKeys there)",
+ `bound=${JSON.stringify(keyText("tui.editor.deleteToLineEnd"))} unbound=${UNBOUND_HINTS.map(([id]) => `${id}=${JSON.stringify(keyText(id))}`).join(",")}`);
+record(boundHints.length === noHints.length + 1 && boundHints.some((line) => line === stripTerminalSequences(keyHint("tui.editor.deleteToLineEnd", "to delete to end"))),
+ "for the BOUND id piStatusRows adds EXACTLY pi's OWN `keyHint` row (pi spells `ctrl+k to delete to end` from pi's table, no hand-written key here)",
+ `rows=${JSON.stringify(boundHints)} pi=${JSON.stringify(stripTerminalSequences(keyHint("tui.editor.deleteToLineEnd", "to delete to end")))}`);
+record(unboundHints.length === noHints.length && mixedHints.length === boundHints.length && mixedHints.every((line) => boundHints.includes(line)),
+ "for pi's UNBOUND ids piStatusRows adds NOTHING: the painted rows for [bound + 2 unbound] are EXACTLY the rows for [bound], so an action pi handles no key for contributes no hint rather than a false one",
+ `unboundRows=${JSON.stringify(unboundHints)} mixed=${JSON.stringify(mixedHints)} noHintRows=${JSON.stringify(noHints)}`);
 
 // 5) the config plane: which of pi's own configuration files pi's OWN readers actually read for this run.
 const CFGROOT = mkdtempSync(join(tmpdir(), "dh-config-"));

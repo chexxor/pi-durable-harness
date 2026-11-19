@@ -226,8 +226,8 @@ command is refused, and the capability matrix names each of them.
 
 The pi package ecosystem is reused through pi's own library exports, and every capability pi has that
 pi-durable does not is **named** rather than quietly dropped: [docs/package-support.md](docs/package-support.md)
-is generated from `src/packages/matrix.mjs` by `scripts/render-matrix.mjs` — 138 rows
-(21 native / 51 shimmed / 66 unsupported), evidence per row, plus the packages actually installed on
+is generated from `src/packages/matrix.mjs` by `scripts/render-matrix.mjs` — 139 rows
+(22 native / 51 shimmed / 66 unsupported), evidence per row, plus the packages actually installed on
 this machine and what loaded from them. `src/packages/loader.mjs` uses pi's `DefaultResourceLoader`,
 `discoverAndLoadExtensions` and `loadProjectContextFiles`; `src/packages/adapter.mjs` maps pi's
 `registerTool`, `tool_call`/`tool_result`/provider/compaction handlers, skills, prompts, themes and
@@ -265,7 +265,7 @@ shimmed or unsupported with a reason a reader can check against the tree, none s
 own pinned docs; the full per-section walk with evidence lines sits in `.ai-work/pi-tui-parity-goal/pi-parity-sweep.md`
 (gitignored state, same numbers). Seven docs carry the surfaces the reported symptoms live on — `tui.md`,
 `keybindings.md`, `slash-commands.md`, `cli.md`, `sessions.md`, `compaction.md`, `configuration.md` — and their
-**228 harvested caps** are claimed by **43 of the 138 matrix rows**: 60 native, 45 shimmed, 112 refused BY NAME,
+**228 harvested caps** are claimed by **43 of the 139 matrix rows**: 60 native, 45 shimmed, 112 refused BY NAME,
 11 covered by harness code only (a file that actually parses `argv` spells the flag, so no row need restate the parser).
 The sweep is measured, not remembered: `scripts/audit-pi-docs.mjs` re-reads pi's docs every run and FAILS on any cap
 neither a row's `names` nor harness code covers, so a capability pi gains at a later pin becomes a finding rather than
@@ -304,7 +304,17 @@ component pi's own code runs, and nothing here reimplements one:
   persist across the following changed frames, no snap to the bottom), `pageDown` pages back, pi's `ctrl+home` lands on
   the document TOP and pi's `ctrl+end` lands on the document END with pi's transient `┃` scrollbar thumb; pi's follow-end
   engages ONLY once the view sits at that end, so a commit typed while the view is scrolled up stays OFF screen and the
-  same commit typed after pi's `ctrl+end` lands ON screen. pi binds NO default key for `lineUp`/`lineDown`/`halfPageUp`/`halfPageDown`
+  same commit typed after pi's `ctrl+end` lands ON screen; pi's `pageDown` (pi's own `ESC[6~`) pages back the same way —
+  at the 70×30 run in `demo/keybindings.test.mjs` (53 checks) the segment answering pi's `pageDown` carries the newest
+  prompt row and NO header row, and the run's tally is `topSegments == 2 && endSegments == 3` over 13 segments.
+  pi's mouse wheel over the transcript is pi's OWN route, not a keybinding: pi's alt screen decodes `ESC[<64;20;10M`/`ESC[<65;20;10M`
+  in its `parseWheelEvent`/`routeWheel` and hands the gesture to `new WheelScrollAccelerator(options.wheelScrollLines ?? 1)`
+  (pi-tui `dist/tui-alt-screen.js`, `dist/wheel-scroll.js`), pi's dock attributes NO keybinding id to either form, and
+  at a 48×16 pty ONE gesture moves EXACTLY ONE transcript row (pi's `lines === "auto"` starts a new gesture at 1 line at
+  the driver's 0.9 s gap) while a wheel-down gesture returns the region EXACTLY — `demo/scrollwheel.test.mjs` (17 checks)
+  also reads pi's `ScrollView` view state in-process (`updateLayout(21, 8)` leaves `scrollTop` 13 with `isFollowingEnd`
+  true, `scrollBy(-1)` returns 0 and leaves 12 with the thumb showing, `scrollBy(-99)` returns −87 and clamps to 0,
+  `scrollToEnd` returns to 13). pi binds NO default key for `lineUp`/`lineDown`/`halfPageUp`/`halfPageDown`
   at this pin (pi's table carries `defaultKeys` [] and `getKeys` answers []), pi's `search` keystroke answers no id at
   this dock for any byte form tried here, and nothing here invents a key or binds an unbound action.
 * **the harness's own status/metadata lines become their OWN WRAPPED rows in pi's transcript region while the window is
@@ -324,6 +334,11 @@ component pi's own code runs, and nothing here reimplements one:
   the caret ALONE. What was wrong was pi-durable's LABEL `ctrl+k to clear the draft`, which named neither pi's words nor a
   true action; pi's own dock hint line is `keyHint("tui.editor.deleteToLineEnd", "to delete to end")`
   (`dist/modes/interactive/interactive-mode.js:766`) and pi's `docs/keybindings.md:79` spells the same id `Delete to line end`.
+  What pi's ctrl+k DOES is now measured at a real 70×30 pty in `demo/keybindings.test.mjs`: `keep drop` plus FIVE separate
+  pi `cursorLeft` feeds plus pi's ONE `0x0b` feed paints a segment carrying `keep` with NO row carrying `drop`, pi's ENTER
+  admits that kept draft (`status=placed`), and pi's `ctrl+a` + `0x0b` on `draft hello world` leaves pi's draft EMPTY so pi's
+  ENTER answers `status=nothing`/`was typed` and the store's ONLY `pi.user` text for that run is `keep`, read back through
+  `src/readapi.mjs`.
   `src/tui/piscreen.mjs` now carries `piDockHints` as the list of actions this dock handles, and `piStatusRows` paints a hint
   row ONLY when pi's exported `keyText(word)` answers a non-empty key — an action pi binds no key to contributes NO row
   rather than a false hint.
@@ -354,8 +369,8 @@ pi's `Image`/`Markdown`/`SelectList`/`SettingsList`/`Loader`/`CancellableLoader`
 branch summarization, pi's `<agent-dir>/keybindings.json`, `SYSTEM.md` and `APPEND_SYSTEM.md` paths, and pi's
 selection-copy keybinding (`ctrl+c` at the dock is pi's clear/exit key, never copy).
 
-How each of those claims is checked: one committed offline demo per fixed surface — FIVE of them (`autocomplete`, `recall`,
-`keybindings`, `pieditor`, `renderparity`) drive a REAL pty through `scripts/ptydrive.mjs`, pi's own python3-stdlib pty helper, one
+How each of those claims is checked: one committed offline demo per fixed surface — SIX of them (`autocomplete`, `recall`,
+`keybindings`, `pieditor`, `renderparity`, `scrollwheel`) drive a REAL pty through `scripts/ptydrive.mjs`, pi's own python3-stdlib pty helper, one
 keystroke per write, `demo/tty.test.mjs` allocates its own python3 pty inline for the row surface, and the rest
 (`piscreen`, `slash`, `modeldefault`) drive the same code paths in-process — asserting
 against pi-tui's painted bytes read back through pi's PUBLIC `Terminal` interface with pi's own
@@ -398,7 +413,7 @@ from the tags.
 | `src/settings.mjs`, `src/providers.mjs`, `src/spend.mjs` | settings/policy resolution, model plane, money ledger |
 | `src/toolsurface.mjs`, `src/executionenv.mjs` | tool guardrails, custom tools, and the execution environment |
 | `src/packages/` | pi package discovery, pi's own loader, the extension shim, the capability matrix |
-| `demo/` | the offline demo suite (no keys, no network); `*-interactive`/`*-writer`/`*-reader` are fixtures; `tty`/`autocomplete`/`recall`/`keybindings`/`pieditor`/`renderparity`/`piscreen`/`slash`/`modeldefault` are the per-surface parity demos — `autocomplete`/`recall`/`keybindings`/`pieditor`/`renderparity` drive a real pty through `scripts/ptydrive.mjs` (`renderparity` drives the SAME script twice, on this tree and on the tree at `checkpoint-pi-tui-parity`), `tty` allocates its own python3 pty inline, the rest run in-process |
+| `demo/` | the offline demo suite (no keys, no network); `*-interactive`/`*-writer`/`*-reader` are fixtures; `tty`/`autocomplete`/`recall`/`keybindings`/`scrollwheel`/`pieditor`/`renderparity`/`piscreen`/`slash`/`modeldefault` are the per-surface parity demos — `autocomplete`/`recall`/`keybindings`/`scrollwheel`/`pieditor`/`renderparity` drive a real pty through `scripts/ptydrive.mjs` (`renderparity` drives the SAME script twice, on this tree and on the tree at `checkpoint-pi-tui-parity`), `tty` allocates its own python3 pty inline, the rest run in-process |
 | `scripts/` | `suite.mjs` (demos + audits), `sync-pi.mjs`, `render-matrix.mjs`, `ptydrive.mjs` (the committed pty driver every TUI proof runs through), the three audits |
 | `docs/` | capability matrix, the pi-parity sweep, attach semantics, provenance table, execution protocol |
 
@@ -406,7 +421,7 @@ from the tags.
 
 Every source file carries a header naming the Durian-Pi file it was extracted from — and what was
 changed or omitted — or saying outright that there is no Durian-Pi original. `scripts/audit-provenance.mjs`
-checks that claim against the tree (`PROVENANCE PASS: 125/125 source files carry a header`), and
+checks that claim against the tree (`PROVENANCE PASS: 127/127 source files carry a header`), and
 `docs/provenance.md` is that audit's output: a table of file → source → what changed, so the extraction is
 re-derivable rather than a paragraph of prose.
 
