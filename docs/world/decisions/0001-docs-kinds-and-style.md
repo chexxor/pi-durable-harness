@@ -180,18 +180,23 @@ New pages fill the quadrants the critique shows are missing:
 
 A generated page moves by moving its generator's output path. Nobody hand-edits a generated page: a hand-edited
 copy cannot be checked against the data it came from, and the matrix's whole point is that a drift between
-data and page is a finding rather than a shrug. The two commands, at the new paths:
+data and page is a finding rather than a shrug. The three commands, at the new paths:
 
 ```bash
 node scripts/render-matrix.mjs > docs/world/reference/package-support.md
 node scripts/audit-provenance.mjs --markdown > docs/world/reference/provenance.md
+node scripts/render-claims.mjs > docs/world/reference/claims-index.md
 node scripts/render-matrix.mjs | diff - docs/world/reference/package-support.md   # must print nothing
+node scripts/audit-provenance.mjs --markdown | diff - docs/world/reference/provenance.md   # must print nothing
+node scripts/render-claims.mjs | diff - docs/world/reference/claims-index.md   # must print nothing
 ```
 
-Both generators write to stdout only; the redirect lives in the prose and in the suite. Prose inside a
+All three generators write to stdout only; the redirect lives in the prose and in the suite. Prose inside a
 generated page is fixed at its source — a matrix row in `src/packages/matrix.mjs`, or a file's own provenance
-header — never in the rendered file. `scripts/render-matrix.mjs` and `scripts/audit-pi-docs.mjs` name the new
-output path in their own header comments, so the rule is visible where the generator lives.
+header — never in the rendered file. `scripts/render-matrix.mjs`, `scripts/render-claims.mjs`, and
+`scripts/audit-pi-docs.mjs` name the new output path in their own header comments, so the rule is visible where
+the generator lives. `scripts/audit-claim-drift.mjs` diff-checks all three generated pages against their
+generators on every suite run, so a hand-edit to any of them fails the suite rather than shipping.
 
 ## The style rules committed to
 

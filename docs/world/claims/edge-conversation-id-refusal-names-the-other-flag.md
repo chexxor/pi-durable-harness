@@ -3,8 +3,10 @@ Claim: --conversation is refused in --session's words, so the hint names the wro
 Kind: claim. Area: edge. This page records one measured finding, and
 `scripts/audit-doc-claims.mjs` re-runs its command on every suite run.
 
-Measured at tree `0687bc1e8f4f585c2e50d42b18526b51015462c1`, pin `v1.5.1`
+Measured at tree `2d8f431b34dee596d9fefc3b542d1ccb6f653e2a`, pin `v1.5.1`
 (sha `dd30101cfc5b0609411dd80b6f93adbc14db14cf`).
+Any file count quoted below is the landing index's, so re-run the command rather than
+remembering it.
 
 ## The finding
 
@@ -37,10 +39,11 @@ a reader can retype. It keeps pi's words for the concept, per the docs rule in
 ```claim
 id: edge-conversation-id-refusal-names-the-other-flag
 area: edge
+state: open
 claim: --conversation is refused in a sentence that spells --session, so the hint names a flag this CLI does not take.
 command: grep -n -- '--conversation <id>' cli.mjs | head -1; node cli.mjs --conversation nope -p hi --faux hi --store .tmp/claims/j.sqlite
 exit: 1
-tree: 0687bc1e8f4f585c2e50d42b18526b51015462c1
+tree: 2d8f431b34dee596d9fefc3b542d1ccb6f653e2a
 pin: dd30101cfc5b0609411dd80b6f93adbc14db14cf
 output:
   --conversation <id>     open a specific conversation id

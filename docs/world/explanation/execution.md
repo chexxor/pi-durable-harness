@@ -1,4 +1,4 @@
-# The execution protocol, as it ran
+# Explanation: the execution protocol as it ran
 
 Every claim in the rows below is re-derivable on this machine, and the numbers are what the checks printed
 at the commits named there. A fresh run prints different ones: read the current tallies in

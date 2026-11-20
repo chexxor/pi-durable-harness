@@ -3,8 +3,10 @@ Claim: a value-taking flag swallows the next flag, so a store path can eat a ver
 Kind: claim. Area: edge. This page records one measured finding, and
 `scripts/audit-doc-claims.mjs` re-runs its command on every suite run.
 
-Measured at tree `0687bc1e8f4f585c2e50d42b18526b51015462c1`, pin `v1.5.1`
+Measured at tree `2d8f431b34dee596d9fefc3b542d1ccb6f653e2a`, pin `v1.5.1`
 (sha `dd30101cfc5b0609411dd80b6f93adbc14db14cf`).
+Any file count quoted below is the landing index's, so re-run the command rather than
+remembering it.
 
 ## The finding
 
@@ -42,10 +44,11 @@ pi's pinned release. The runbook lists this claim without fixing it.
 ```claim
 id: edge-store-swallows-next-flag
 area: edge
+state: open
 claim: A --store with no value takes the next flag as its path, so the run writes a store named --mode and exits 0.
 command: mkdir -p .tmp/claims/swallow && cd .tmp/claims/swallow && node ../../../cli.mjs --cwd . --faux one --store --mode json -p hi; ls
 exit: 0
-tree: 0687bc1e8f4f585c2e50d42b18526b51015462c1
+tree: 2d8f431b34dee596d9fefc3b542d1ccb6f653e2a
 pin: dd30101cfc5b0609411dd80b6f93adbc14db14cf
 output:
   one

@@ -1,4 +1,4 @@
-# pi's context budget in THIS workspace: what applies, and when it stopped applying
+# Explanation: pi's context budget in this workspace
 
 `scripts/diagnose-context-budget.mjs` prints all of this from the tree, offline, using pi's own readers
 (`src/settings.mjs` over pi's `SettingsManager`, `src/packages/loader.mjs` over pi's

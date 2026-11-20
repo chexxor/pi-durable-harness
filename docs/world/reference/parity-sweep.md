@@ -1,4 +1,4 @@
-# Pi parity sweep — what this harness honours from pi, and what it refuses BY NAME
+# Reference: what pi honours and what this harness refuses
 
 This is the committed summary of the divergence sweep; the full per-section walk, with the evidence lines,
 is `.ai-work/pi-tui-parity-goal/pi-parity-sweep.md` (gitignored state, same numbers). Nothing on this page is

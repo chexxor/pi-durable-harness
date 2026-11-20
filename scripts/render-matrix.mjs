@@ -44,7 +44,7 @@ const runtime = await runtimePlane();
 const counts = Object.fromEntries(["native", "shimmed", "unsupported"].map((status) => [status, capabilityMatrix(status).length]));
 
 console.log(
-"# pi package support matrix\n" +
+"# Reference: the pi package support matrix\n" +
 "\n" +
 "One row per pi capability, and nothing here is a guess: the rows live as data in\n" +
 "`src/packages/matrix.mjs`, and this file is what `scripts/render-matrix.mjs` renders from that data. Edit\n" +
@@ -99,5 +99,7 @@ runtime.packages.join("\n") +
 "loaded by pi's loader (jiti, against pi's own `ExtensionRuntime`). What is NOT done is installing a package\n" +
 "that is not on disk: `DefaultPackageManager` resolves from npm and git over the network, and every demo in\n" +
 "this repo runs offline. A package that is configured and not installed is reported as absent by discovery -\n" +
-"the honest half - and installing it stays the `pi` CLI's job.\n"
+"the honest half - and installing it stays the `pi` CLI's job.\n" +
+"\n" +
+"Related: the [runbook](../runbooks/next-milestone.md) lists the open findings, and the [claims index](claims-index.md) indexes them at this tree.\n"
 );

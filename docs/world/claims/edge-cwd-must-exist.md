@@ -3,8 +3,10 @@ Claim: --cwd must already exist, and the run reports a filesystem error instead 
 Kind: claim. Area: edge. This page records one measured finding, and
 `scripts/audit-doc-claims.mjs` re-runs its command on every suite run.
 
-Measured at tree `0687bc1e8f4f585c2e50d42b18526b51015462c1`, pin `v1.5.1`
+Measured at tree `2d8f431b34dee596d9fefc3b542d1ccb6f653e2a`, pin `v1.5.1`
 (sha `dd30101cfc5b0609411dd80b6f93adbc14db14cf`).
+Any file count quoted below is the landing index's, so re-run the command rather than
+remembering it.
 
 ## The finding
 
@@ -46,10 +48,11 @@ pi spells no `--cwd` verb. The runbook lists this claim without fixing it.
 ```claim
 id: edge-cwd-must-exist
 area: edge
+state: open
 claim: A run whose --cwd does not exist answers a raw mkdir error that names neither the flag nor the rule.
 command: node cli.mjs --cwd /no/such/dir -p hi --faux hi
 exit: 1
-tree: 0687bc1e8f4f585c2e50d42b18526b51015462c1
+tree: 2d8f431b34dee596d9fefc3b542d1ccb6f653e2a
 pin: dd30101cfc5b0609411dd80b6f93adbc14db14cf
 output:
   EACCES: permission denied, mkdir '/no/such/dir/.pi-harness'

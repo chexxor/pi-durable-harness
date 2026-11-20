@@ -18,7 +18,7 @@ Two audiences read different halves of these docs:
 ```bash
 npm install
 node scripts/sync-pi.mjs --offline --report   # pin | declared | resolved, and drift named as NOT MEASURED
-node scripts/suite.mjs                        # every offline demo plus the four audits: no keys, no network
+node scripts/suite.mjs                        # every offline demo plus the five audits: no keys, no network
 ```
 
 `npm install` reaches the registry, so it is the one step above that is not offline. Everything else here
@@ -50,13 +50,13 @@ ls docs/world/claims | wc -l
 
 ```text
 v24.22.1
-SUITE pass=24 fail=0 demos+audits=24 (tree=0687bc1e8f4f585c2e50d42b18526b51015462c1)
+SUITE pass=25 fail=0 demos+audits=25 (tree=2d8f431b34dee596d9fefc3b542d1ccb6f653e2a)
 pin v1.5.1 (dd30101cfc5b) - 10 @earendil-works packages declared, 1.5.1/1.5.1/1.5.1/1.5.1/1.5.1/1.5.1/1.5.1/1.5.1/1.5.1/1.5.1
 10
 ```
 
 Read those values off the run, never from memory: the tally names the tree it ran on, and the claim count
-names the findings directory. Twenty demos plus four audits make the tally above.
+names the findings directory. Twenty demos plus five audits make the tally above.
 
 ## Where to go next
 
@@ -68,9 +68,9 @@ names the findings directory. Twenty demos plus four audits make the tally above
   [the settings and policy keys mapped](docs/world/reference/settings-and-policy-keys.md),
   [attach semantics](docs/world/reference/attach.md), [the repo layout](docs/world/reference/harness-layout.md)
 - Generated reference (regenerate, never hand-edit):
-  [the package support matrix](docs/world/reference/package-support.md) from
-  `node scripts/render-matrix.mjs`, and [the provenance table](docs/world/reference/provenance.md) from
-  `node scripts/audit-provenance.mjs --markdown`
+  [the package support matrix](docs/world/reference/package-support.md) from `node scripts/render-matrix.mjs`,
+  [the provenance table](docs/world/reference/provenance.md) from `node scripts/audit-provenance.mjs --markdown`,
+  and [the claims index](docs/world/reference/claims-index.md) from `node scripts/render-claims.mjs`
 - Explanation: [what this repo proves](docs/world/explanation/what-this-repo-proves.md),
   [pi's context budget here](docs/world/explanation/context-budget.md),
   [the execution protocol as it ran](docs/world/explanation/execution.md)

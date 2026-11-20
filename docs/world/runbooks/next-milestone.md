@@ -4,25 +4,33 @@ Kind: runbook. One page indexes every claim recorded in `docs/world/claims/`, an
 milestone does with each one. It fixes nothing: a claim is a finding, and a fix is a commit with its own
 proof, which this page cannot carry.
 
-Measured at tree `0687bc1e8f4f585c2e50d42b18526b51015462c1`, pin `v1.5.1`
+Measured at tree `2d8f431b34dee596d9fefc3b542d1ccb6f653e2a`, pin `v1.5.1`
 (sha `dd30101cfc5b0609411dd80b6f93adbc14db14cf`). The commands below print the set fresh on any tree, so
-re-run them rather than trusting the numbers here.
+re-run them rather than trusting the numbers here. Any file count quoted below is the landing index's.
 
 ## The set, counted
 
 ```bash
 ls docs/world/claims | wc -l
 node scripts/audit-doc-claims.mjs | tail -1
+node scripts/audit-claim-drift.mjs | tail -1
+node scripts/audit-claim-drift.mjs | grep '^claims checked'
 ```
 
 ```text
 10
 DOC-CLAIM AUDIT PASS: every claim page under docs/world/claims re-answers with the output it quotes, at a tree and pin that resolve, and no page on the docs surface states what a claim says is missing
+CLAIM-DRIFT AUDIT PASS: every claim answers on this tree and cites a tree and pin that still hold, every generated page equals its generator, and no tracked page states a gap the claims say is open
+claims checked=10 current=10 stale=0 areas=configuration=2 edge=4 features=2 install=2 states=fixed=1 open=9
 ```
 
-Ten pages, four areas, and the gate still passes, so every row below is a live finding rather than a
-list that has rotted. The gate is `scripts/audit-doc-claims.mjs`, and
-[the ADR](../decisions/0001-docs-kinds-and-style.md) states why a findings list is falsifiable at all.
+Ten pages, four areas, and both claim gates pass, so every row below is a live finding rather than a
+list that has rotted. The tally's `states` counts say one finding is closed at this tree and nine are
+open. The gates are `scripts/audit-doc-claims.mjs`, which re-answers each page, and
+`scripts/audit-claim-drift.mjs`, which adds that the set is current here and that the generated pages
+still equal their generators. [The claims index](../reference/claims-index.md) is generated from the same
+rows and lists every page with the state and tree it cites. [The ADR](../decisions/0001-docs-kinds-and-style.md)
+states why a findings list is falsifiable at all.
 
 ## Install
 
@@ -72,10 +80,11 @@ list that has rotted. The gate is `scripts/audit-doc-claims.mjs`, and
 ### features-provenance-audit-double-counts
 
 - Area: features
-- Claim: the provenance audit walks the same trees twice, so its count and table repeat files.
-- Verify: `node scripts/audit-provenance.mjs | head -1; node scripts/audit-provenance.mjs --markdown | grep -c '^| '; node scripts/audit-provenance.mjs --markdown | grep '^| ' | sort -u | wc -l; git ls-files '*.mjs' | wc -l; grep -c 'sourceFiles(\["src", "demo", "scripts", "\."\]' scripts/audit-provenance.mjs`
-- Next: walk each tree once, or drop the `.` entry and name the root files separately, then regenerate the
-  page rather than editing it.
+- Claim: the audit used to walk the same trees twice, and it now walks each tree once, so this finding is
+  closed at this tree.
+- Verify: `node scripts/audit-provenance.mjs; node scripts/audit-provenance.mjs --markdown | grep -c '^| '; node scripts/audit-provenance.mjs --markdown | grep '^| ' | sort -u | wc -l; git ls-files '*.mjs' | wc -l; git ls-files '*.mjs' | grep -c '^scripts/audit-provenance.mjs$'`
+- Next: none for this one. The page carries the block the drift gate re-verifies, and its state is `fixed`,
+  so a milestone that changes the audit re-reads that block rather than picking a new gap.
 
 ## Edge cases
 
@@ -119,9 +128,10 @@ list that has rotted. The gate is `scripts/audit-doc-claims.mjs`, and
 2. Fix the gap in code, keeping the rules the ADR names as binding: one storage opener, one mutation line,
    ownership claimed and released in `cli.mjs`'s main try and finally, the pin unmoved, no new dependency,
    pi's theme colours and pi's own words for refusals.
-3. Re-run `node scripts/audit-doc-claims.mjs` and `node scripts/suite.mjs`, and read both tallies off the
-   runs. A gate that fails is a page that stopped answering, not a fix that missed a test.
-4. Regenerate the two generated pages with their generators, and re-measure any number a page quotes
+3. Re-run `node scripts/audit-doc-claims.mjs`, `node scripts/audit-claim-drift.mjs`, and
+   `node scripts/suite.mjs`, and read all three tallies off the runs. A gate that fails is a page that
+   stopped answering, not a fix that missed a test.
+4. Regenerate the three generated pages with their generators, and re-measure any number a page quotes
    before that page quotes it again.
 5. Land one commit, tag it, and move no older tag. Then re-measure the claim count against this page.
 
@@ -130,7 +140,8 @@ gate is what tells them apart.
 
 ## Related
 
-- [The claim pages](../claims/) hold the commands and the verbatim outputs behind every row above.
+- [The claim pages](../claims/) hold the commands and the verbatim outputs behind every row above, and
+  [the claims index](../reference/claims-index.md) lists them with the state each one carries.
 - [Verify a claim offline](../how-to/verify-a-claim-offline.md) walks one page through the gate.
 - [The ADR](../decisions/0001-docs-kinds-and-style.md) states the writing rules a fix must keep.
 - [What this repo proves](../explanation/what-this-repo-proves.md) states what each verdict is proof of.

@@ -1,4 +1,4 @@
-# Attach: one store, one writer, many readers
+# Reference: one store, one writer, many readers
 
 The store in a directory is owned by exactly one process at a time. Everything else - a second
 harness, a viewer, a client on a socket - is a reader. This is what "attach" means here, and it is
