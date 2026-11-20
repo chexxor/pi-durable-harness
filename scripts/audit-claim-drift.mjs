@@ -55,6 +55,7 @@ const generated = [
  { page: "docs/world/reference/package-support.md", argv: ["scripts/render-matrix.mjs"] },
  { page: "docs/world/reference/provenance.md", argv: ["scripts/audit-provenance.mjs", "--markdown"] },
  { page: "docs/world/reference/claims-index.md", argv: null },
+ { page: "docs/world/reference/invariants.md", argv: ["scripts/render-invariants.mjs"] },
 ];
 let inSync = 0;
 for (const entry of generated) {

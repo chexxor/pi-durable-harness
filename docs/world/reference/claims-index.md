@@ -6,7 +6,7 @@ that matters is the last one: `answers as quoted` means the page's command still
 repo sits on, and `STALE` means it stopped answering, which is what `scripts/audit-claim-drift.mjs` fails
 on. Read the numbers from the run below them, never from memory.
 
-claims checked=10 current=10 stale=0 areas=configuration=2 edge=4 features=2 install=2 states=fixed=1 open=9
+claims checked=10 current=9 stale=1 areas=configuration=2 edge=4 features=2 install=2 states=fixed=1 open=9
 
 | area | claim | page | state | tree cited | pin cited | status at HEAD |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -17,7 +17,7 @@ claims checked=10 current=10 stale=0 areas=configuration=2 edge=4 features=2 ins
 | edge | --faux with no value takes -p as its reply, so a piped prompt is refused and the store sidecar is still written. | [edge-faux-swallows-print-flag](../claims/edge-faux-swallows-print-flag.md) | open | 2d8f431b34de | dd30101cfc5b | answers as quoted |
 | edge | A --store with no value takes the next flag as its path, so the run writes a store named --mode and exits 0. | [edge-store-swallows-next-flag](../claims/edge-store-swallows-next-flag.md) | open | 2d8f431b34de | dd30101cfc5b | answers as quoted |
 | features | No CLI verb lists a store's conversations or entries; the read path exists as an API and as RPC records. | [features-no-cli-way-to-inspect-a-store](../claims/features-no-cli-way-to-inspect-a-store.md) | open | 2d8f431b34de | dd30101cfc5b | answers as quoted |
-| features | The provenance audit answers 68/68 for the 69 tracked .mjs files (its own file excluded by name) and its generated table holds 70 rows, 70 of them unique. | [features-provenance-audit-double-counts](../claims/features-provenance-audit-double-counts.md) | fixed | 2d8f431b34de | dd30101cfc5b | answers as quoted |
+| features | The provenance audit answers 68/68 for the 69 tracked .mjs files (its own file excluded by name) and its generated table holds 70 rows, 70 of them unique. | [features-provenance-audit-double-counts](../claims/features-provenance-audit-double-counts.md) | fixed | 2d8f431b34de | dd30101cfc5b | STALE (3 findings) |
 | install | The tracked repo carries no node_modules, so installing needs the registry, and no page names an offline route. | [install-dependencies-not-vendored](../claims/install-dependencies-not-vendored.md) | open | 2d8f431b34de | dd30101cfc5b | answers as quoted |
 | install | No page states the oldest Node that answers here, and nothing proves one. | [install-node-floor-undocumented](../claims/install-node-floor-undocumented.md) | open | 2d8f431b34de | dd30101cfc5b | answers as quoted |
 

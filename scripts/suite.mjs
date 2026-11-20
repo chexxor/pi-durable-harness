@@ -90,13 +90,16 @@ for (const file of demos()) {
 		for (const l of r.out.split("\n")) if (l.trim()) console.log(`  ${l}`);
 	}
 }
-// The five audits run in the same command as the demos, so "the suite is green" means one thing every
+// The six audits run in the same command as the demos, so "the suite is green" means one thing every
 	// time: the demos pass, the tree has no code-level dependency on the dropped orchestration layer,
 	// every source file still names where it came from, every claim page under docs/world/claims/
-	// still answers with the output it quotes, and that claim set is current at this tree with every
-	// generated page still equal to what generates it. Each is a check rather than a prose claim, and a
-	// suite that ran only the demos would be green on a tree that violated any of them.
-	for (const script of ["audit-orchestration.mjs", "audit-provenance.mjs", "audit-pi-docs.mjs", "audit-doc-claims.mjs", "audit-claim-drift.mjs"]) {
+	// still answers with the output it quotes, that claim set is current at this tree with every
+	// generated page still equal to what generates it, and the structural rules the ADR names as binding
+	// still hold on the tracked source - one storage opener, one mutation line, the ownership claim released
+	// in cli.mjs' main finally, no raw SQL, the pin unmoved, no dependency added. Each is a check rather
+	// than a prose claim, and a suite that ran only the demos would be green on a tree that violated any
+	// of them.
+	for (const script of ["audit-orchestration.mjs", "audit-provenance.mjs", "audit-pi-docs.mjs", "audit-doc-claims.mjs", "audit-claim-drift.mjs", "audit-invariants.mjs"]) {
 	 const audit = runScript([join(ROOT, "scripts", script)]);
 	 if (audit.ok) {
 	 pass++;
