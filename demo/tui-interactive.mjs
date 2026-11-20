@@ -15,7 +15,7 @@
 //     written in this file, so the exit paths are pi-tui's teardown rather than our bytes;
 //   - the data behind the rows is this harness's read planes: a readOnly store (src/readapi.mjs), the sync
 //     cursor read and the watch plane (src/tui/sync.mjs) - the TUI never opens a mutation line, and
-//     docs/attach.md records the measured read-only-file failure that rules a second writer out;
+//     docs/world/reference/attach.md records the measured read-only-file failure that rules a second writer out;
 //   - keys and tick rules come from src/tui/driver.mjs, which is headless and whose rules demo/tui.test.mjs
 //     asserts, so the interactive path and the proved path are the same machine;
 //   - a typed line is HANDED OFF to `cli.mjs` rather than written here: the viewer is a reader, and one
@@ -32,14 +32,14 @@ import { parseArgs } from "node:util";
 
 const { positionals: positionals, values: values } = parseArgs({ allowPositionals: true, strict: false, allowShort: true });
 const storePath = values["store"] ?? positionals[0];
-// --writer-socket: the socket the OWNING session serves (see demo/attach-writer.mjs and docs/attach.md).
+// --writer-socket: the socket the OWNING session serves (see demo/attach-writer.mjs and docs/world/reference/attach.md).
 // Given one, a submitted line is handed over that transport and lands on the owner's mutation line
 // exactly once by requestId; without one, the viewer prints the command for the writer it cannot be.
 const writerSocket = values["writer-socket"];
 if (!storePath) {
  console.error("usage: node demo/tui-interactive.mjs --store <path.sqlite> [--conversation <id>]\n" +
   Object.entries(DRIVER_KEYS).map(([verb, keys]) => `${verb}: ${keys.join(" / ")}`).join("\n") +
-  "\nthis viewer reads; it never opens a second mutation line (see docs/attach.md).");
+  "\nthis viewer reads; it never opens a second mutation line (see docs/world/reference/attach.md).");
  process.exit(2);
 }
 
@@ -80,7 +80,7 @@ const driver = createUiDriver({
  pollMs: 700,
  onInput: async (line) => {
   // The viewer never writes durable state itself: the OWNING session holds the store's mutation line
-  // (docs/attach.md). With --writer-socket the typed line goes over that transport, where pi-durable's
+  // (docs/world/reference/attach.md). With --writer-socket the typed line goes over that transport, where pi-durable's
   // SubmissionDraft requestId makes a resend land exactly once; the viewer's next paint then shows the
   // row the owner committed.
   if (writerSocket && await ownerAlive(writerSocket)) {

@@ -6,8 +6,8 @@
 // pinned package - node_modules/@earendil-works/pi-coding-agent/docs/cli.md at v1.5.1, the same file
 // scripts/audit-pi-docs.mjs reads - so the verbs a user already knows keep working; the `pi` binary on this
 // machine is one tag ahead (1.5.2) and is NOT what this harness follows. pi's verbs that this harness does
-// not take are named in docs/package-support.md rather than silently dropped.
-// Two pi verbs cannot be matched and are named in docs/package-support.md: pi keeps one session FILE
+// not take are named in docs/world/reference/package-support.md rather than silently dropped.
+// Two pi verbs cannot be matched and are named in docs/world/reference/package-support.md: pi keeps one session FILE
 // per session (here one SQLite store per directory, so --session-dir becomes --store) and pi's `--fork`
 // is Conversation.fork(), not a file copy. Seats, broker, cross-seat queue, genlock, per-item worktrees,
 // metrics, check, constitution, selfdev: dropped outright - this harness is single-agent.
@@ -90,7 +90,7 @@ needs a prompt - an interactive window in a pipe would sit open forever.
 
 A pi flag this harness has no plane for (pi's --api-key, --approve, --no-approve, --offline, --name,
 --models, --session-id, --session-dir, --fork, --theme, --use-theme, --no-mcp, --no-builtin-tools,
---tui-mode, --verbose, --export) is refused BY NAME quoting pi's own help words, and docs/package-support.md
+--tui-mode, --verbose, --export) is refused BY NAME quoting pi's own help words, and docs/world/reference/package-support.md
 carries the row that says why - a pi flag is never quietly dropped into the prompt words.`;
 
 /** pi's own command line, spelled as pi spells it: the option rows below are the spellings pi's
@@ -99,11 +99,11 @@ carries the row that says why - a pi flag is never quietly dropped into the prom
  * either one of pi's - refused BY NAME quoting pi's own help words - or not pi's at all - the harness's
  * own unknown-flag/unknown-option rejection, unchanged from before. A pi flag is never quietly pushed
  * into the prompt words: that is how a user loses a flag, and it is what the user hit at the dock.
- * pi's verbs with no plane here are the rows in docs/package-support.md that name them. */
+ * pi's verbs with no plane here are the rows in docs/world/reference/package-support.md that name them. */
 export function parseArgs(argv) {
   const a = { appendSystem: [], messages: [], noKinds: [], extensionPaths: [], skillPaths: [], templatePaths: [] };
   const piRefusal = (spelling) =>
-    `pi flag ${piCliFlagText(spelling)}; this harness does not take it - the capability matrix names it in docs/package-support.md`;
+    `pi flag ${piCliFlagText(spelling)}; this harness does not take it - the capability matrix names it in docs/world/reference/package-support.md`;
   for (let i = 0; i < argv.length; i++) {
     const t = argv[i];
     // pi's own end of option parsing: after `--`, every arg is a message (dist/cli/args.js pushes

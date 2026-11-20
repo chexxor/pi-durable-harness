@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 // PROVENANCE: no Durian-Pi original - Durian-Pi never re-read pi's own docs against a capability matrix
 // (its seats ran the `pi` CLI, so pi's capability surface belonged to pi's own process and was never
-// enumerated); this file is ours, and its job is to make docs/package-support.md's coverage claim falsifiable.
+// enumerated); this file is ours, and its job is to make docs/world/reference/package-support.md's coverage claim falsifiable.
 // It answers the objective's own verification step: "re-read pi's docs packages.md / extensions.md / rpc.md
 // / cli.md / sessions.md / compaction.md and confirm each capability is either exercised by a demo id cited
-// in docs/package-support.md or listed there as unsupported with a reason".
+// in docs/world/reference/package-support.md or listed there as unsupported with a reason".
 // scripts/audit-pi-docs.mjs - what pi's OWN docs (inside the pinned package on THIS machine) enumerate as a
 // capability, against what this harness's matrix and code claim.
 //

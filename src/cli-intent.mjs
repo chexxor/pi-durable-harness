@@ -18,7 +18,7 @@
 //     same reason;
 //   - `--session-dir` is `--store` and pi's reopen-by-id `--session <id>` takes pi-durable's
 //     ConversationId, because this harness has one SQLite store per directory instead of one session
-//     file per session. The refusal for `--session-dir` is named in docs/package-support.md.
+//     file per session. The refusal for `--session-dir` is named in docs/world/reference/package-support.md.
 //
 // Symbols checked against the pinned dist of @earendil-works 1.5.1, not assumed:
 //   - pi flag spellings: dist/cli/args.js of @earendil-works/pi-coding-agent carries `--print`/`-p`,
@@ -262,7 +262,7 @@ export async function harnessInvocation(flags, { extraExtensions = [], additiona
 		// (DefaultResourceLoaderOptions' additionalExtensionPaths / additionalSkillPaths /
 		// additionalPromptTemplatePaths, read off dist/core/resource-loader.d.ts at this pin), so pi's
 		// loader decides what they load - no second discovery rule is written here. pi's `--theme <path>`
-		// has no plane here and is refused by name (see docs/package-support.md).
+		// has no plane here and is refused by name (see docs/world/reference/package-support.md).
 		...(Object.keys(additionalResourcePaths).length ? { additionalResourcePaths } : {}),
 	});
 	const parts = await openHarness({

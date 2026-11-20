@@ -15,7 +15,7 @@
 // extensions, not packages - and pi's package MANAGER resolves from npm, which needs the network, and
 // every demo in this repo runs offline. So the harness finds what is ALREADY on disk and hands pi's own
 // loader the paths (src/packages/loader.mjs). Installing a package that is not on disk stays pi's job,
-// reported as such in docs/package-support.md rather than half-implemented here.
+// reported as such in docs/world/reference/package-support.md rather than half-implemented here.
 import { readdirSync, readFileSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 

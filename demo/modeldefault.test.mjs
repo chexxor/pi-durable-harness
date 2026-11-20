@@ -18,7 +18,7 @@
 //   pi-durable dist/harness/types.d.ts `Agent { model, ... }` and `Harness.open`.
 // DROPPED from pi's own interactive layer, on purpose and NAMED in the capability matrix rather than
 // silently: pi's `InteractiveMode` and its model-selector dialogs, pi's autocomplete dropdown, pi's
-// session FILES, and pi's `--api-key` flag (no plane here - refused BY NAME, row in docs/package-support.md).
+// session FILES, and pi's `--api-key` flag (no plane here - refused BY NAME, row in docs/world/reference/package-support.md).
 //
 // WHY THE FEED IS ONE KEYSTROKE PER CHUNK: measured, not assumed - piDockLoop's scripted feed appends
 // "\n", which pi-tui's Editor is NOT (its ENTER is "\r"), so a whole-line chunk draws and submits

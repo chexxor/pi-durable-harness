@@ -9,7 +9,7 @@
 //   - pi's exported `RpcClient` (dist/modes/rpc/rpc-client.d.ts) sends exactly `{...command, id}` and
 //     reads `response.data`, so demo/rpc.test.mjs drives THIS handler through pi's own client.
 // pi commands whose verb pi-durable has no plane for are answered with `success: false` and the reason
-// they have none - never a silent no-op - and every one of them is a row in docs/package-support.md
+// they have none - never a silent no-op - and every one of them is a row in docs/world/reference/package-support.md
 // rather than a dropped name.
 // Durian-Pi's seam kept here is the one-command-handler rule of src/cli-seam.mjs and its flag parser
 // src/tui/durable/cliargs.mjs (read 2026-11-14/15 at pin v1.5.1): the attach socket and the RPC stdin
@@ -45,7 +45,7 @@ const PI_COMMANDS = [
 	"get_session_stats", "export_html", "switch_session", "fork", "clone", "get_fork_messages",
 	"get_entries", "get_tree", "get_last_assistant_text", "set_session_name", "get_commands",
 ];
-// Verbs this harness adds on the same protocol; each is a row in docs/package-support.md.
+// Verbs this harness adds on the same protocol; each is a row in docs/world/reference/package-support.md.
 const EXTRA_COMMANDS = ["status", "config", "read", "watch"];
 // pi verbs pi-durable has no plane to answer, and the reason it has none. Answered as a refusal.
 const UNSUPPORTED = {

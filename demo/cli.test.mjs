@@ -15,7 +15,7 @@
 // demo/attach.test.mjs); pi's per-session-file verbs (`--continue`, `--resume`, `--session <file>`) become
 // pi-durable's verbs on one store (`-c`/`-r` reopen the store's root line, `--session <id>` names a
 // ConversationId), and pi's `--session-dir` becomes `--store` - both refusals are rows in
-// docs/package-support.md, not silence.
+// docs/world/reference/package-support.md, not silence.
 //
 // The replay rule, read from the pinned dist rather than remembered:
 //   node_modules/@earendil-works/pi-durable/dist/harness/types.d.ts, inside ToolRegistration:

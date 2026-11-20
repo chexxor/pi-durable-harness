@@ -90,11 +90,12 @@ for (const file of demos()) {
 		for (const l of r.out.split("\n")) if (l.trim()) console.log(`  ${l}`);
 	}
 }
-// The three audits run in the same command as the demos, so "the suite is green" means one thing every
-	// time: the demos pass, the tree has no code-level dependency on the dropped orchestration layer, and
-	// every source file still names where it came from. Each is a check rather than a prose claim, and a
-	// suite that ran only the demos would be green on a tree that violated either.
-	for (const script of ["audit-orchestration.mjs", "audit-provenance.mjs", "audit-pi-docs.mjs"]) {
+// The four audits run in the same command as the demos, so "the suite is green" means one thing every
+	// time: the demos pass, the tree has no code-level dependency on the dropped orchestration layer,
+	// every source file still names where it came from, and every claim page under docs/world/claims/
+	// still answers with the output it quotes. Each is a check rather than a prose claim, and a
+	// suite that ran only the demos would be green on a tree that violated any of them.
+	for (const script of ["audit-orchestration.mjs", "audit-provenance.mjs", "audit-pi-docs.mjs", "audit-doc-claims.mjs"]) {
 	 const audit = runScript([join(ROOT, "scripts", script)]);
 	 if (audit.ok) {
 	 pass++;

@@ -1,9 +1,9 @@
 // PROVENANCE: no Durian-Pi original - the capability matrix this renders has no counterpart in Durian-Pi, which
 // never loaded pi's package plane outside a seat; the file is named as such so a reader knows it is ours.
-// scripts/render-matrix.mjs - docs/package-support.md is GENERATED from src/packages/matrix.mjs, never
+// scripts/render-matrix.mjs - docs/world/reference/package-support.md is GENERATED from src/packages/matrix.mjs, never
 // kept beside it: two places that name the same capability drift silently the first time one of them is
 // edited, and a reader cannot tell which half is true. Run:
-// node scripts/render-matrix.mjs > docs/package-support.md
+// node scripts/render-matrix.mjs > docs/world/reference/package-support.md
 import { capabilityMatrix, renderMatrixMarkdown, unmappedRuntime } from "../src/packages/matrix.mjs";
 import { packageRoots, discoverPackages, extensionPaths } from "../src/packages/discover.mjs";
 import { loadPiExtensions } from "../src/packages/loader.mjs";

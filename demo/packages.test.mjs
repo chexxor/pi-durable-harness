@@ -240,7 +240,7 @@ const realInventory = inventory.filter((row) => row.name !== "invented_event_at_
 check("matrix covers every real pi capability that loaded", unmappedRuntime(realInventory).length === 0, unmappedRuntime(realInventory).map((row) => `${row.capability}:${row.name}`).join(" | "));
 check("the detector catches an unnamed capability", unmappedRuntime(inventory).some((row) => row.name === "invented_event_at_this_pin"), "detector found nothing to report");
 
-const doc = readFileSync("docs/package-support.md", "utf8");
+const doc = readFileSync("docs/world/reference/package-support.md", "utf8");
 const unsupported = capabilityMatrix("unsupported");
 const unnamed = unsupported.filter((row) => !row.names.every((name) => doc.includes(name)));
 check("docs name every unsupported capability", unnamed.length === 0, unnamed.map((row) => row.names.join(",")).join(" | "));

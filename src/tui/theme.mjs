@@ -13,7 +13,7 @@
 //     (`accent`, `border`, `borderMuted`, ...) to {kind: "rgb", r, g, b} for truecolour terminals and `fgAnsi`
 //     maps the same tokens to ready-made SGR numbers for terminals that report only palette slots.
 //
-// What is deliberately NOT claimed, and is a row of its own in docs/package-support.md: pi's theme SELECTION
+// What is deliberately NOT claimed, and is a row of its own in docs/world/reference/package-support.md: pi's theme SELECTION
 // dialog (`/settings` -> Theme), pi's light/dark auto-detection from the terminal's reported background, and
 // pi's renderer swap (`setTheme`). What IS mapped here is the palette itself: pi's colours on the rows this
 // harness's TUI already draws through @earendil-works/pi-tui.

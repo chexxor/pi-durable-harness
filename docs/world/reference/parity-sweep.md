@@ -6,7 +6,7 @@ remembered: every count below is re-measurable by the commands at the bottom, at
 `git rev-parse HEAD` = the commit this page was written on, pin `v1.5.1` / sha
 `dd30101cfc5b0609411dd80b6f93adbc14db14cf`, no pin bump, no new dependency.
 
-Status words, identical in the matrix, in `docs/package-support.md`, and here:
+Status words, identical in the matrix, in `docs/world/reference/package-support.md`, and here:
 
 * **native** — pi's own component/code serves it here unchanged; this harness only mounts it.
 * **shimmed** — honoured, but through pi's exports with a mapping this harness writes.
@@ -26,8 +26,8 @@ Status words, identical in the matrix, in `docs/package-support.md`, and here:
   100 %: tui.md 18/18 · keybindings.md 90/90 · configuration.md 20/20 · slash-commands.md 27/27 · cli.md 64/64 ·
   sessions.md 7/7 · compaction.md 2/2 · packages.md 3/3 · extensions.md 130/130 · rpc.md 7/7 · rpc-commands.md 36/36 ·
   json.md 1/1 · message-types.md 13/13 · rpc-extension-ui.md 9/9 · session-format.md 16/16 — sums to 443.
-* `docs/package-support.md` is the rendered view of the SAME rows and is **GENERATED ONLY** by
-  `node scripts/render-matrix.mjs > docs/package-support.md`. It is never hand-edited, so the table cannot drift
+* `docs/world/reference/package-support.md` is the rendered view of the SAME rows and is **GENERATED ONLY** by
+  `node scripts/render-matrix.mjs > docs/world/reference/package-support.md`. It is never hand-edited, so the table cannot drift
   from `src/packages/matrix.mjs` — edit the data, not the doc.
 
 ## The seven docs, section by section
@@ -217,8 +217,8 @@ node scripts/suite.mjs                       # offline demos + audits; expect fa
 node scripts/audit-pi-docs.mjs               # 443 caps over pi's 15 docs, 139 rows -> PASS or it names the gap
 node scripts/audit-provenance.mjs            # provenance header in every source file
 node scripts/audit-orchestration.mjs         # no dependency on the dropped orchestration concepts
-node scripts/render-matrix.mjs > docs/package-support.md   # the ONLY way this table changes
-diff docs/package-support.md <(node scripts/render-matrix.mjs)   # must be empty
+node scripts/render-matrix.mjs > docs/world/reference/package-support.md   # the ONLY way this table changes
+diff docs/world/reference/package-support.md <(node scripts/render-matrix.mjs)   # must be empty
 ```
 
 The row view stays reachable via `--tui`/`--row-view`; a TTY default stays the pi-style screen; a piped run never

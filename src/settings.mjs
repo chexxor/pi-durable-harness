@@ -21,7 +21,7 @@
 // and project scopes, keeps resource lists combined, and validates values; a second parser here would be
 // a second vocabulary for one file, which is the drift Durian-Pi's config comment names. What this module
 // adds is only the MAPPING onto pi-durable's names, and the pi keys that have no pi-durable counterpart
-// are returned as rows, not folded away (the same discipline as docs/package-support.md).
+// are returned as rows, not folded away (the same discipline as docs/world/reference/package-support.md).
 //
 // Symbols checked against the pinned dist of @earendil-works 1.5.1, not assumed:
 //   - pi-coding-agent dist/core/settings-manager.d.ts: `class SettingsManager { static create(cwd, agentDir?,
@@ -70,7 +70,7 @@ export function piSettings({ cwd = process.cwd(), agentDir = getAgentDir(), trus
 
 /**
  * The same policy under pi-durable's names. Only keys both sides spell are carried; `unmapped` names the
- * rest, with the reason, so `docs/package-support.md` can print them and a reader can see a missing knob
+ * rest, with the reason, so `docs/world/reference/package-support.md` can print them and a reader can see a missing knob
  * rather than trust a mapping.
  *
  * pi's `retry` carries a `provider` sub-object and a `maxDelayMs` that pi-durable's `ConversationRetryPolicy`

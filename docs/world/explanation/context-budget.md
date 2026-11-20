@@ -55,4 +55,4 @@ same `{"enabled": false}` back out of pi-durable's own agent doc.
 
 The one thing this harness deliberately does NOT do is inherit pi's *session* mechanics: there is no
 session file here to compact, the store is a pi-durable transcript, and pi's `export_html`/`set_session_name`
-verbs are named unsupported in `docs/package-support.md` for that reason.
+verbs are named unsupported in `docs/world/reference/package-support.md` for that reason.
