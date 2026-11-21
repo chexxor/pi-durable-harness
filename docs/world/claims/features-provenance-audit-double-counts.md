@@ -3,7 +3,7 @@ Claim: the provenance audit walks each tree once, so its count and its table nam
 Kind: claim. Area: features. This page records one measured finding, and
 `scripts/audit-claim-drift.mjs` re-runs its command on every suite run.
 
-Measured at tree `d294f882c252ecaf925dd6b53378b08e5e97cf3d`, pin `v1.5.1`
+Measured at tree `38d0c2c0bf8b8063ad05fc93f01cc4e3554b5297`, pin `v1.5.1`
 (sha `dd30101cfc5b0609411dd80b6f93adbc14db14cf`).
 
 ## The finding, closed
@@ -64,7 +64,7 @@ closed_by: checkpoint-claims-current
 claim: The provenance audit answers 71/71 for the 72 tracked .mjs files (its own file excluded by name) and its generated table holds 73 rows, 73 of them unique.
 command: node scripts/audit-provenance.mjs; node scripts/audit-provenance.mjs --markdown | grep -c '^| '; node scripts/audit-provenance.mjs --markdown | grep '^| ' | sort -u | wc -l; git ls-files '*.mjs' | wc -l; git ls-files '*.mjs' | grep -c '^scripts/audit-provenance.mjs$'
 exit: 0
-tree: d294f882c252ecaf925dd6b53378b08e5e97cf3d
+tree: 38d0c2c0bf8b8063ad05fc93f01cc4e3554b5297
 pin: dd30101cfc5b0609411dd80b6f93adbc14db14cf
 absent: (re-walked the first three|twice the files it audits)
 output:

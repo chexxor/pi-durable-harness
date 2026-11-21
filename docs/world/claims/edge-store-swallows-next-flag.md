@@ -3,7 +3,7 @@ Claim: a value-taking flag swallows the next flag, so a store path can eat a ver
 Kind: claim. Area: edge. This page records one measured finding, and
 `scripts/audit-doc-claims.mjs` re-runs its command on every suite run.
 
-Measured at tree `d294f882c252ecaf925dd6b53378b08e5e97cf3d`, pin `v1.5.1`
+Measured at tree `38d0c2c0bf8b8063ad05fc93f01cc4e3554b5297`, pin `v1.5.1`
 (sha `dd30101cfc5b0609411dd80b6f93adbc14db14cf`).
 Any file count quoted below is the landing index's, so re-run the command rather than
 remembering it.
@@ -48,7 +48,7 @@ state: open
 claim: A --store with no value takes the next flag as its path, so the run writes a store named --mode and exits 0.
 command: mkdir -p .tmp/claims/swallow && cd .tmp/claims/swallow && node ../../../cli.mjs --cwd . --faux one --store --mode json -p hi; ls
 exit: 0
-tree: d294f882c252ecaf925dd6b53378b08e5e97cf3d
+tree: 38d0c2c0bf8b8063ad05fc93f01cc4e3554b5297
 pin: dd30101cfc5b0609411dd80b6f93adbc14db14cf
 absent: (file literally named .--mode.|Nothing names the flag that was eaten)
 output:

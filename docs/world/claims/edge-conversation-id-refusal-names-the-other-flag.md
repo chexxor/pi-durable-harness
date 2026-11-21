@@ -3,7 +3,7 @@ Claim: --conversation is refused in --session's words, so the hint names the wro
 Kind: claim. Area: edge. This page records one measured finding, and
 `scripts/audit-doc-claims.mjs` re-runs its command on every suite run.
 
-Measured at tree `d294f882c252ecaf925dd6b53378b08e5e97cf3d`, pin `v1.5.1`
+Measured at tree `38d0c2c0bf8b8063ad05fc93f01cc4e3554b5297`, pin `v1.5.1`
 (sha `dd30101cfc5b0609411dd80b6f93adbc14db14cf`).
 Any file count quoted below is the landing index's, so re-run the command rather than
 remembering it.
@@ -43,7 +43,7 @@ state: open
 claim: --conversation is refused in a sentence that spells --session, so the hint names a flag this CLI does not take.
 command: grep -n -- '--conversation <id>' cli.mjs | head -1; node cli.mjs --conversation nope -p hi --faux hi --store .tmp/claims/j.sqlite
 exit: 1
-tree: d294f882c252ecaf925dd6b53378b08e5e97cf3d
+tree: 38d0c2c0bf8b8063ad05fc93f01cc4e3554b5297
 pin: dd30101cfc5b0609411dd80b6f93adbc14db14cf
 absent: (names the flag the reader typed|one sentence that a reader can retype)
 output:

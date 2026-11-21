@@ -4,7 +4,7 @@ Kind: runbook. One page indexes every claim recorded in `docs/world/claims/`, an
 milestone does with each one. It fixes nothing: a claim is a finding, and a fix is a commit with its own
 proof, which this page cannot carry.
 
-Measured at tree `2d8f431b34dee596d9fefc3b542d1ccb6f653e2a`, pin `v1.5.1`
+Measured at tree `38d0c2c0bf8b8063ad05fc93f01cc4e3554b5297`, pin `v1.5.1`
 (sha `dd30101cfc5b0609411dd80b6f93adbc14db14cf`). The commands below print the set fresh on any tree, so
 re-run them rather than trusting the numbers here. Any file count quoted below is the landing index's.
 
@@ -15,22 +15,29 @@ ls docs/world/claims | wc -l
 node scripts/audit-doc-claims.mjs | tail -1
 node scripts/audit-claim-drift.mjs | tail -1
 node scripts/audit-claim-drift.mjs | grep '^claims checked'
+node scripts/audit-invariants.mjs | tail -1
 ```
 
 ```text
 10
 DOC-CLAIM AUDIT PASS: every claim page under docs/world/claims re-answers with the output it quotes, at a tree and pin that resolve, and no page on the docs surface states what a claim says is missing
-CLAIM-DRIFT AUDIT PASS: every claim answers on this tree and cites a tree and pin that still hold, every generated page equals its generator, and no tracked page states a gap the claims say is open
+CLAIM-DRIFT AUDIT PASS: every claim answers on this tree and cites a tree and pin that still hold, every state fixed claim names a closed_by certificate that git resolves, every generated page equals its generator, and no tracked page states a gap the claims say is open
 claims checked=10 current=10 stale=0 areas=configuration=2 edge=4 features=2 install=2 states=fixed=1 open=9
+INVARIANTS AUDIT PASS: 6/6 rules kept on 31 tracked .mjs at tree 38d0c2c0bf8b8063ad05fc93f01cc4e3554b5297 - one storage opener in the two files it names, one mutation line, the ownership claim released in cli.mjs' main finally, no raw SQL, the pin unmoved, no dependency added
 ```
 
 Ten pages, four areas, and both claim gates pass, so every row below is a live finding rather than a
 list that has rotted. The tally's `states` counts say one finding is closed at this tree and nine are
-open. The gates are `scripts/audit-doc-claims.mjs`, which re-answers each page, and
-`scripts/audit-claim-drift.mjs`, which adds that the set is current here and that the generated pages
-still equal their generators. [The claims index](../reference/claims-index.md) is generated from the same
-rows and lists every page with the state and tree it cites. [The ADR](../decisions/0001-docs-kinds-and-style.md)
-states why a findings list is falsifiable at all.
+open, and `current=10 stale=0` says every page re-answered here at a tree this repo can still reach.
+The gates are `scripts/audit-doc-claims.mjs`, which re-answers each page, and
+`scripts/audit-claim-drift.mjs`, which adds that the set is current here, that a `state: fixed` page names
+a `closed_by` certificate git resolves, and that the four generated pages still equal their generators.
+The line below them is the sixth suite audit, `scripts/audit-invariants.mjs`, which reads the structural
+rules the ADR binds off the tracked source once and fails on the count - 6/6 rules kept here, on 31 of the
+72 tracked `.mjs` files, the other 41 named as exempt in its own output. [The claims index](../reference/claims-index.md)
+is generated from the same rows and lists every page with the state and tree it cites, and
+[the invariants page](../reference/invariants.md) prints the same rows the gate reads, as a table.
+[The ADR](../decisions/0001-docs-kinds-and-style.md) states why a findings list is falsifiable at all.
 
 ## Install
 
@@ -125,14 +132,20 @@ states why a findings list is falsifiable at all.
 
 1. Open the claim page and run its `command` from the repo root. If it no longer answers, the finding is
    stale: re-measure it and rewrite the page's block, or delete the page if the gap is gone.
-2. Fix the gap in code, keeping the rules the ADR names as binding: one storage opener, one mutation line,
-   ownership claimed and released in `cli.mjs`'s main try and finally, the pin unmoved, no new dependency,
-   pi's theme colours and pi's own words for refusals.
-3. Re-run `node scripts/audit-doc-claims.mjs`, `node scripts/audit-claim-drift.mjs`, and
-   `node scripts/suite.mjs`, and read all three tallies off the runs. A gate that fails is a page that
-   stopped answering, not a fix that missed a test.
-4. Regenerate the three generated pages with their generators, and re-measure any number a page quotes
-   before that page quotes it again.
+2. Fix the gap in code, keeping the rules the ADR names as binding: one storage opener in the two files the
+   rule names, one mutation line (`writerSubmit`, defined once in `src/tui/writer.mjs`), the ownership claim
+   released inside `cli.mjs`'s main finally, no SQL statement and no sqlite module other than pi-durable's
+   opener, the pin unmoved, and no dependency the pin does not already carry. `scripts/audit-invariants.mjs`
+   is what fails if one of those slips, naming the file and the line, so a fix that breaks a structural rule
+   fails the suite rather than passing on behaviour no demo imports.
+3. Re-run `node scripts/audit-invariants.mjs`, `node scripts/audit-doc-claims.mjs`,
+   `node scripts/audit-claim-drift.mjs`, and `node scripts/suite.mjs`, and read all four tallies off the
+   runs. A gate that fails is a page that stopped answering or a structural rule that stopped holding, not
+   a fix that missed a test.
+4. Regenerate the four generated pages with their generators - `docs/world/reference/package-support.md`,
+   `docs/world/reference/provenance.md`, `docs/world/reference/claims-index.md`, and
+   `docs/world/reference/invariants.md` - and re-measure any number a page quotes before that page
+   quotes it again. `scripts/audit-claim-drift.mjs` fails on a page that stopped matching its generator.
 5. Land one commit, tag it, and move no older tag. Then re-measure the claim count against this page.
 
 The order matters: a claim fixed and not re-verified is indistinguishable from a claim that rotted, and the
