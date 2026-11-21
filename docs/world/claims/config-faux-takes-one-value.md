@@ -3,7 +3,7 @@ Claim: a value-taking flag reads one word, so an unquoted reply loses its tail i
 Kind: claim. Area: configuration. This page records one measured finding, and
 `scripts/audit-doc-claims.mjs` re-runs its command on every suite run.
 
-Measured at tree `2d8f431b34dee596d9fefc3b542d1ccb6f653e2a`, pin `v1.5.1`
+Measured at tree `d294f882c252ecaf925dd6b53378b08e5e97cf3d`, pin `v1.5.1`
 (sha `dd30101cfc5b0609411dd80b6f93adbc14db14cf`).
 Any file count quoted below is the landing index's, so re-run the command rather than
 remembering it.
@@ -46,7 +46,7 @@ state: open
 claim: --faux reads ONE argument, so an unquoted reply loses its tail into the prompt words without a warning.
 command: mkdir -p .tmp/claims && node cli.mjs --store .tmp/claims/faux1.sqlite --cwd .tmp/claims --faux one two -p "hello"
 exit: 0
-tree: 2d8f431b34dee596d9fefc3b542d1ccb6f653e2a
+tree: d294f882c252ecaf925dd6b53378b08e5e97cf3d
 pin: dd30101cfc5b0609411dd80b6f93adbc14db14cf
 absent: (keeps the reply whole|says which words it took)
 output:

@@ -3,7 +3,7 @@ Claim: the provenance audit walks each tree once, so its count and its table nam
 Kind: claim. Area: features. This page records one measured finding, and
 `scripts/audit-claim-drift.mjs` re-runs its command on every suite run.
 
-Measured at tree `2d8f431b34dee596d9fefc3b542d1ccb6f653e2a`, pin `v1.5.1`
+Measured at tree `d294f882c252ecaf925dd6b53378b08e5e97cf3d`, pin `v1.5.1`
 (sha `dd30101cfc5b0609411dd80b6f93adbc14db14cf`).
 
 ## The finding, closed
@@ -23,17 +23,17 @@ node scripts/audit-provenance.mjs; node scripts/audit-provenance.mjs --markdown 
 Verbatim:
 
 ```text
-headers found in 68/68 source files
+headers found in 71/71 source files
 PROVENANCE PASS: every source file names the source it was extracted from, or says there is none
-70
-70
-69
+73
+73
+72
 1
 ```
 
 Read the counts in order: the header count the audit answers, its verdict, the table rows the generator
 prints, the unique ones among those rows, the `.mjs` paths this repo tracks, and the one tracked path
-that is the audit's own file. The invariant holds: 68 = 69 tracked minus that one file, which the audit
+that is the audit's own file. The invariant holds: 71 = 72 tracked minus that one file, which the audit
 excludes by name rather than by skipping a tree, and the row count equals the unique-row count, so no
 row repeats another. These counts come from the landing index, so they move with the tree — re-run the
 command rather than remembering it.
@@ -61,18 +61,18 @@ id: features-provenance-audit-double-counts
 area: features
 state: fixed
 closed_by: checkpoint-claims-current
-claim: The provenance audit answers 68/68 for the 69 tracked .mjs files (its own file excluded by name) and its generated table holds 70 rows, 70 of them unique.
+claim: The provenance audit answers 71/71 for the 72 tracked .mjs files (its own file excluded by name) and its generated table holds 73 rows, 73 of them unique.
 command: node scripts/audit-provenance.mjs; node scripts/audit-provenance.mjs --markdown | grep -c '^| '; node scripts/audit-provenance.mjs --markdown | grep '^| ' | sort -u | wc -l; git ls-files '*.mjs' | wc -l; git ls-files '*.mjs' | grep -c '^scripts/audit-provenance.mjs$'
 exit: 0
-tree: 2d8f431b34dee596d9fefc3b542d1ccb6f653e2a
+tree: d294f882c252ecaf925dd6b53378b08e5e97cf3d
 pin: dd30101cfc5b0609411dd80b6f93adbc14db14cf
 absent: (re-walked the first three|twice the files it audits)
 output:
-  headers found in 68/68 source files
+  headers found in 71/71 source files
   PROVENANCE PASS: every source file names the source it was extracted from, or says there is none
-  70
-  70
-  69
+  73
+  73
+  72
   1
 ```
 

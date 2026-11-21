@@ -3,7 +3,7 @@ Claim: --faux with no value swallows -p, so a prompt typed on stdin gets refused
 Kind: claim. Area: edge. This page records one measured finding, and
 `scripts/audit-doc-claims.mjs` re-runs its command on every suite run.
 
-Measured at tree `2d8f431b34dee596d9fefc3b542d1ccb6f653e2a`, pin `v1.5.1`
+Measured at tree `d294f882c252ecaf925dd6b53378b08e5e97cf3d`, pin `v1.5.1`
 (sha `dd30101cfc5b0609411dd80b6f93adbc14db14cf`).
 Any file count quoted below is the landing index's, so re-run the command rather than
 remembering it.
@@ -50,7 +50,7 @@ state: open
 claim: --faux with no value takes -p as its reply, so a piped prompt is refused and the store sidecar is still written.
 command: mkdir -p .tmp/claims/edge2 && (echo hi | node cli.mjs --store .tmp/claims/edge2/g.sqlite --faux -p; echo "cli exit=$?"); ls .tmp/claims/edge2
 exit: 0
-tree: 2d8f431b34dee596d9fefc3b542d1ccb6f653e2a
+tree: d294f882c252ecaf925dd6b53378b08e5e97cf3d
 pin: dd30101cfc5b0609411dd80b6f93adbc14db14cf
 absent: (loses the .-p.|which flag was eaten)
 output:

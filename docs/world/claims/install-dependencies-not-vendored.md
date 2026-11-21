@@ -3,7 +3,7 @@ Claim: the repo carries no dependency tree, so an offline clone cannot install
 Kind: claim. Area: install. This page records one measured finding, and
 `scripts/audit-doc-claims.mjs` re-runs its command on every suite run.
 
-Measured at tree `2d8f431b34dee596d9fefc3b542d1ccb6f653e2a`, pin `v1.5.1`
+Measured at tree `d294f882c252ecaf925dd6b53378b08e5e97cf3d`, pin `v1.5.1`
 (sha `dd30101cfc5b0609411dd80b6f93adbc14db14cf`).
 Any file count quoted below is the landing index's, so re-run the command rather than
 remembering it. Re-run the command before quoting a number again.
@@ -48,7 +48,7 @@ state: open
 claim: The tracked repo carries no node_modules, so installing needs the registry, and no page names an offline route.
 command: git ls-files node_modules | wc -l; git ls-files package-lock.json | wc -l; node scripts/sync-pi.mjs --offline --report | grep -E 'DRIFT|via=' | head -1
 exit: 0
-tree: 2d8f431b34dee596d9fefc3b542d1ccb6f653e2a
+tree: d294f882c252ecaf925dd6b53378b08e5e97cf3d
 pin: dd30101cfc5b0609411dd80b6f93adbc14db14cf
 output:
   0

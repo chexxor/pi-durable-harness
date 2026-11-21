@@ -18,7 +18,7 @@ Two audiences read different halves of these docs:
 ```bash
 npm install
 node scripts/sync-pi.mjs --offline --report   # pin | declared | resolved, and drift named as NOT MEASURED
-node scripts/suite.mjs                        # every offline demo plus the five audits: no keys, no network
+node scripts/suite.mjs                        # every offline demo plus the six audits: no keys, no network
 ```
 
 `npm install` reaches the registry, so it is the one step above that is not offline. Everything else here
@@ -50,13 +50,13 @@ ls docs/world/claims | wc -l
 
 ```text
 v24.22.1
-SUITE pass=25 fail=0 demos+audits=25 (tree=2d8f431b34dee596d9fefc3b542d1ccb6f653e2a)
+SUITE pass=26 fail=0 demos+audits=26 (tree=d294f882c252ecaf925dd6b53378b08e5e97cf3d)
 pin v1.5.1 (dd30101cfc5b) - 10 @earendil-works packages declared, 1.5.1/1.5.1/1.5.1/1.5.1/1.5.1/1.5.1/1.5.1/1.5.1/1.5.1/1.5.1
 10
 ```
 
 Read those values off the run, never from memory: the tally names the tree it ran on, and the claim count
-names the findings directory. Twenty demos plus five audits make the tally above.
+names the findings directory. Twenty demos plus six audits make the tally above.
 
 ## Where to go next
 
@@ -70,7 +70,8 @@ names the findings directory. Twenty demos plus five audits make the tally above
 - Generated reference (regenerate, never hand-edit):
   [the package support matrix](docs/world/reference/package-support.md) from `node scripts/render-matrix.mjs`,
   [the provenance table](docs/world/reference/provenance.md) from `node scripts/audit-provenance.mjs --markdown`,
-  and [the claims index](docs/world/reference/claims-index.md) from `node scripts/render-claims.mjs`
+  [the claims index](docs/world/reference/claims-index.md) from `node scripts/render-claims.mjs`, and
+  [the structural invariants](docs/world/reference/invariants.md) from `node scripts/render-invariants.mjs`
 - Explanation: [what this repo proves](docs/world/explanation/what-this-repo-proves.md),
   [pi's context budget here](docs/world/explanation/context-budget.md),
   [the execution protocol as it ran](docs/world/explanation/execution.md)
@@ -87,4 +88,8 @@ names the findings directory. Twenty demos plus five audits make the tally above
 storage opener, one mutation line, ownership claimed and released in `cli.mjs`'s main try and finally, the
 pin unmoved, no new dependency, pi's own colours and words — and the reason the docs are split by kind.
 A gap you fix goes through [the runbook](docs/world/runbooks/next-milestone.md): re-run the gate, then the
-suite, then land one commit.
+suite, then land one commit. `scripts/audit-invariants.mjs` reads those rules off the tracked source once
+and fails on the count, naming the file and the line, so a second storage opener in a file no demo imports
+or a release moved out of the finally block fails the suite rather than passing on behaviour; its counts
+are the generated [invariants page](docs/world/reference/invariants.md), which regenerates from the same
+rows the gate reads.

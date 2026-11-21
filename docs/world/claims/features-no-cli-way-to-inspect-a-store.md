@@ -3,7 +3,7 @@ Claim: no CLI verb reads a store back, so reading a session needs the RPC protoc
 Kind: claim. Area: features. This page records one measured finding, and
 `scripts/audit-doc-claims.mjs` re-runs its command on every suite run.
 
-Measured at tree `2d8f431b34dee596d9fefc3b542d1ccb6f653e2a`, pin `v1.5.1`
+Measured at tree `d294f882c252ecaf925dd6b53378b08e5e97cf3d`, pin `v1.5.1`
 (sha `dd30101cfc5b0609411dd80b6f93adbc14db14cf`).
 Any file count quoted below is the landing index's, so re-run the command rather than
 remembering it.
@@ -47,7 +47,7 @@ state: open
 claim: No CLI verb lists a store's conversations or entries; the read path exists as an API and as RPC records.
 command: node cli.mjs --help | grep -c -- '--list-conversations'; printf '{"type":"status"}\n' | node cli.mjs --mode rpc --store .tmp/claims/rpc1.sqlite --cwd .tmp/claims --faux x | tail -1
 exit: 0
-tree: 2d8f431b34dee596d9fefc3b542d1ccb6f653e2a
+tree: d294f882c252ecaf925dd6b53378b08e5e97cf3d
 pin: dd30101cfc5b0609411dd80b6f93adbc14db14cf
 output:
   0

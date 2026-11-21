@@ -12,7 +12,7 @@ passes all of them. So the shape is read off the tracked source once, in `script
 and both readers import those rows: the gate as a hard exit, this page as the table.
 
 source surface read=31 tracked .mjs (cli.mjs + src/, src/packages/matrix.mjs held out as DATA
-prose about these rules rather than code that could break one); not read=38 .mjs (demo/ fixtures
+prose about these rules rather than code that could break one); not read=41 .mjs (demo/ fixtures
 measure the rules against their own stores, and scripts/ auditors read the rules in order to check them)
 
 invariants checked=6 kept=6 violated=0
