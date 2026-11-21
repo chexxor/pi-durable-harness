@@ -3,7 +3,7 @@
 // than "the demos pass".
 //
 // PROVENANCE: no Durian-Pi original - Durian-Pi never recorded findings against a tree and a pin, and never
-// diffed a generated page against its generator, so both rules under this gate are this repo's own and the
+// diffed a generated page against its generator, so the rules under this gate are this repo's own and the
 // file says so. What it shares with scripts/audit-doc-claims.mjs is the block reading, imported from
 // scripts/claims-check.mjs rather than parsed a second time.
 //
@@ -11,8 +11,9 @@
 // the block's own words. That is half of what a findings list needs. The other half is currency, and a list
 // of gaps that is quietly a release behind is not a list the next milestone can work from. This gate adds the
 // checks that gate does not make: the tree a claim cites must be this tree or the commit under it, the
-// generated pages must still equal their generators, and a claim's `absent:` regex must not appear anywhere on
-// the tracked docs surface - which is how a documented fix closes a claim rather than hiding beside it.
+// generated pages must still equal their generators, a `state: fixed` claim must name a `closed_by` certificate
+// that git resolves, and a claim's `absent:` regex must not appear anywhere on the tracked docs surface -
+// which is how a documented fix closes a claim rather than hiding beside it.
 import { claimRows, pinSha, docsSurface } from "./claims-check.mjs";
 import { indexLines } from "./render-claims.mjs";
 import { readFileSync } from "node:fs";
@@ -69,6 +70,17 @@ for (const entry of generated) {
  else findings.push(`${entry.page}: drifted from what generates it (run the generator and rewrite the page, never edit it)`);
 }
 
+/** A `state: fixed` claim is only as good as the certificate it names: `closed_by` must resolve through git. */
+let certificates = 0;
+let resolved = 0;
+for (const row of rows) {
+ if (row.state !== "fixed") continue;
+ certificates += 1;
+ if (!row.closedSha) continue;
+ resolved += 1;
+ console.log(`closure certificate ${row.id} names ${row.closedBy}, a ${row.closedKind} that resolves to ${row.closedSha.slice(0, 12)}`);
+}
+
 let rules = 0;
 for (const row of rows) {
  if (!row.absent) continue;
@@ -102,10 +114,11 @@ const counted = (obj) => Object.entries(obj).map(([key, value]) => `${key}=${val
 
 console.log(`claims checked=${rows.length} current=${current} stale=${rows.length - current} areas=${counted(areas)} states=${counted(states)}`);
 console.log(`generated pages checked=${generated.length} in sync=${inSync} drift=${generated.length - inSync}`);
+console.log(`closure certificates checked=${certificates} resolved=${resolved} unresolved=${certificates - resolved}`);
 console.log(`absent rules checked=${rules} over ${docs.length} tracked pages`);
 for (const finding of findings) console.log(`  ${finding}`);
 if (findings.length) {
  console.log(`CLAIM-DRIFT AUDIT FAIL: ${findings.length} findings against this tree`);
  process.exit(1);
 }
-console.log("CLAIM-DRIFT AUDIT PASS: every claim answers on this tree and cites a tree and pin that still hold, every generated page equals its generator, and no tracked page states a gap the claims say is open");
+console.log("CLAIM-DRIFT AUDIT PASS: every claim answers on this tree and cites a tree and pin that still hold, every state fixed claim names a closed_by certificate that git resolves, every generated page equals its generator, and no tracked page states a gap the claims say is open");

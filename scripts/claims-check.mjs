@@ -33,6 +33,16 @@ function gitReport(args) {
  }
 }
 
+/** A closure certificate: a tag or commit name, resolved through git or answered null, never guessed at. */
+function certificate(ref) {
+ const name = String(ref || "").trim();
+ if (!name) return null;
+ const sha = gitReport(["rev-parse", "--verify", name]);
+ if (!sha || !/^[0-9a-f]{40}$/.test(String(sha))) return null;
+ const tag = gitReport(["for-each-ref", "--format=%(refname)", `refs/tags/${name}`]);
+ return { name, sha: String(sha), kind: tag ? "tag" : "commit" };
+}
+
 /** HEAD and the commit under it. A claim cites the tree it was cut from, and the commit that lands a claim is never its own tree. */
 function recentTrees() {
  const out = gitReport(["rev-list", "--max-count=2", "HEAD"]);
@@ -136,6 +146,9 @@ export function claimRows() {
    tree: String(block?.tree ?? ""),
    pin: String(block?.pin ?? ""),
    absent: String(block?.absent ?? ""),
+   closedBy: String(block?.closed_by ?? ""),
+   closedSha: "",
+   closedKind: "",
    command: String(block?.command ?? ""),
    exit: String(block?.exit ?? ""),
    output: block?.__lines ?? [],
@@ -156,6 +169,16 @@ export function claimRows() {
   else if (!recent.includes(row.tree)) row.problems.push(`cites a tree older than HEAD and the commit under it (the trees that can be cited: ${recent.join(", ") || "none"})`);
   if (!/^[0-9a-f]{40}$/.test(row.pin)) row.problems.push(`pin ${row.pin || "blank"} is not a full 40-hex sha`);
   else if (pin && row.pin !== pin.sha) row.problems.push(`cites a pin other than pi-main.pin.json's ${pin.sha}`);
+  if (row.state === "fixed" && !row.closedBy) row.problems.push("state fixed with no closed_by certificate: nothing names the tag or commit that landed the close");
+  if (row.state !== "fixed" && row.closedBy) row.problems.push(`state ${row.state} carries a closed_by certificate ${row.closedBy}, so the close is recorded beside a claim that says it is still open`);
+  if (row.state === "fixed" && row.closedBy) {
+   const cert = certificate(row.closedBy);
+   if (!cert) row.problems.push(`closed_by certificate ${row.closedBy} does not resolve through git to a commit in this repo`);
+   else {
+    row.closedSha = cert.sha;
+    row.closedKind = cert.kind;
+   }
+  }
   if (!row.problems.length && block.command) {
    const ran = runCommand(block.command);
    if (ran.refused) {

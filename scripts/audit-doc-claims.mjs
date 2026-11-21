@@ -25,6 +25,7 @@
 //   pin     the 40-hex pin it was measured at, which must equal pi-main.pin.json's own sha
 //   output  lines matched in order as trimmed substring hits over the run's combined output
 //   absent  optional regex that must NOT match the docs surface, and absent_in the roots searched
+//   closed_by a tag or commit name that landed the close, required of state fixed and resolved by git
 import { readdirSync, readFileSync, lstatSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
@@ -153,6 +154,8 @@ const findings = [];
 const areas = {};
 let pass = 0;
 let fail = 0;
+let certChecked = 0;
+let certResolved = 0;
 
 for (const name of pages) {
  const path = join(ROOT, CLAIM_DIR, name);
@@ -179,6 +182,14 @@ for (const name of pages) {
 	 if (!gitReport(["rev-parse", "--verify", value])) problems.push(`${field} does not resolve in this repo`);
  }
  if (pin && block.pin !== pin.sha) problems.push(`cites a pin other than pi-main.pin.json's ${pin.sha}`);
+// A close that names nothing is a claim someone believed rather than one that was checked: the certificate
+// has to be a tag or commit this repo can point at, so git resolves it or the claim stays a finding.
+ if (String(block.state ?? "open") === "fixed") {
+	 certChecked += 1;
+	 if (!block.closed_by) problems.push("state fixed with no closed_by certificate: nothing names the tag or commit that landed the close");
+	 else if (!gitReport(["rev-parse", "--verify", String(block.closed_by)])) problems.push(`closed_by certificate ${block.closed_by} does not resolve in this repo`);
+	 else certResolved += 1;
+ }
  if (!block.__lines.length) problems.push("no expected output lines");
  if (block.__lines.length && !/^\d+$/.test(String(block.exit ?? ""))) problems.push("no exit code stated");
  if (!problems.length) {
@@ -217,6 +228,7 @@ for (const name of pages) {
 
 const counted = Object.entries(areas).map(([area, count]) => `${area}=${count}`).join(" ");
 console.log(`claims checked=${pass + fail} pass=${pass} fail=${fail} areas=${counted} (pages under docs/world/claims=${pages.length})`);
+console.log(`closure certificates checked=${certChecked} resolved=${certResolved} unresolved=${certChecked - certResolved}`);
 for (const finding of findings) console.log(`  ${finding}`);
 if (findings.length) {
  console.log(`DOC-CLAIM AUDIT FAIL: ${findings.length} claim findings`);

@@ -47,12 +47,20 @@ from, or says there is none. The page is regenerated, never hand-edited, with
 `node scripts/audit-provenance.mjs --markdown > docs/world/reference/provenance.md`, and the drift gate
 diff-checks that page against its generator on every suite run.
 
+The close carries a certificate the gates resolve: `closed_by: checkpoint-claims-current`, the annotated tag
+at the commit whose subject is `docs(world): make the claim set provably current at this tree`. `git
+for-each-ref refs/tags/checkpoint-claims-current` names that tag and `git rev-parse --verify` resolves it, so
+the close points at a commit this repo can show rather than at a paragraph. `scripts/claims-check.mjs` resolves
+the certificate through git and both claim gates fail on a `state: fixed` claim whose certificate is missing or
+unresolvable, which is why a close here is checked and not asserted.
+
 ## The block the gate reads
 
 ```claim
 id: features-provenance-audit-double-counts
 area: features
 state: fixed
+closed_by: checkpoint-claims-current
 claim: The provenance audit answers 68/68 for the 69 tracked .mjs files (its own file excluded by name) and its generated table holds 70 rows, 70 of them unique.
 command: node scripts/audit-provenance.mjs; node scripts/audit-provenance.mjs --markdown | grep -c '^| '; node scripts/audit-provenance.mjs --markdown | grep '^| ' | sort -u | wc -l; git ls-files '*.mjs' | wc -l; git ls-files '*.mjs' | grep -c '^scripts/audit-provenance.mjs$'
 exit: 0
