@@ -52,6 +52,7 @@ command: node cli.mjs --store .tmp/claims/inv.sqlite --cwd .tmp/claims --faux hi
 exit: 0
 tree: 2d8f431b34dee596d9fefc3b542d1ccb6f653e2a
 pin: dd30101cfc5b0609411dd80b6f93adbc14db14cf
+absent: (count the things they claim to count|names the keys the run mapped and left unmapped)
 output:
   settings=0 unmappedSettings=0
   settings [cwd=/home/chexxor/Git/pi-durable-harness]: compaction.enabled=false

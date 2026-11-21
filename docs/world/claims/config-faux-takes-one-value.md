@@ -48,6 +48,7 @@ command: mkdir -p .tmp/claims && node cli.mjs --store .tmp/claims/faux1.sqlite -
 exit: 0
 tree: 2d8f431b34dee596d9fefc3b542d1ccb6f653e2a
 pin: dd30101cfc5b0609411dd80b6f93adbc14db14cf
+absent: (keeps the reply whole|says which words it took)
 output:
   plane: packages=4
   settings=0 unmappedSettings=0

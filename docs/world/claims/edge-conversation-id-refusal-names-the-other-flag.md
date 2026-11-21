@@ -45,6 +45,7 @@ command: grep -n -- '--conversation <id>' cli.mjs | head -1; node cli.mjs --conv
 exit: 1
 tree: 2d8f431b34dee596d9fefc3b542d1ccb6f653e2a
 pin: dd30101cfc5b0609411dd80b6f93adbc14db14cf
+absent: (names the flag the reader typed|one sentence that a reader can retype)
 output:
   --conversation <id>     open a specific conversation id
   --session needs a conversation id, got "nope"

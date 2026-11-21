@@ -58,6 +58,7 @@ command: node scripts/audit-provenance.mjs; node scripts/audit-provenance.mjs --
 exit: 0
 tree: 2d8f431b34dee596d9fefc3b542d1ccb6f653e2a
 pin: dd30101cfc5b0609411dd80b6f93adbc14db14cf
+absent: (re-walked the first three|twice the files it audits)
 output:
   headers found in 68/68 source files
   PROVENANCE PASS: every source file names the source it was extracted from, or says there is none

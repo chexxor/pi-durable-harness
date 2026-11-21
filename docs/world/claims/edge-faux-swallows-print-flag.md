@@ -52,6 +52,7 @@ command: mkdir -p .tmp/claims/edge2 && (echo hi | node cli.mjs --store .tmp/clai
 exit: 0
 tree: 2d8f431b34dee596d9fefc3b542d1ccb6f653e2a
 pin: dd30101cfc5b0609411dd80b6f93adbc14db14cf
+absent: (loses the .-p.|which flag was eaten)
 output:
   plane: packages=5
   print mode needs a prompt; run with --help
